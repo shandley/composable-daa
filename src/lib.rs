@@ -83,5 +83,10 @@ pub mod prelude {
         SpikeSpec, SpikeType, SpikedData, TierMetrics, ValidationConfig, ValidationResult,
         ValidationSummary, evaluate_spikes, run_spike_validation, shuffle_labels,
         spike_abundance, spike_abundance_with_mode, spike_presence,
+        // Stress testing
+        StressConfig, StressParams, StressRunResult, StressSummary,
+        AggregatedMetrics, PowerPoint, ModeComparisonSummary, ModeStats,
+        run_stress_test, generate_parameter_grid, aggregate_results,
+        calculate_power_curves, compare_modes,
     };
 }

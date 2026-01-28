@@ -7,7 +7,10 @@ use composable_daa::data::{CountMatrix, Metadata};
 use composable_daa::error::Result;
 use composable_daa::pipeline::{Pipeline, PipelineConfig};
 use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity};
-use composable_daa::spike::{evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection};
+use composable_daa::spike::{
+    evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection,
+    StressConfig, run_stress_test,
+};
 use std::path::PathBuf;
 
 /// CLI-friendly spike mode enum
@@ -155,6 +158,65 @@ enum Commands {
         #[arg(short, long, default_value = "pipeline.yaml")]
         output: PathBuf,
     },
+
+    /// Run compositional stress testing to evaluate pipeline robustness
+    Stress {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Group column name
+        #[arg(short, long)]
+        group: String,
+
+        /// Target group for spiking
+        #[arg(short = 't', long)]
+        target: String,
+
+        /// Formula for the model
+        #[arg(short, long)]
+        formula: String,
+
+        /// Coefficient to test
+        #[arg(long)]
+        test_coef: String,
+
+        /// Spike fractions (comma-separated, e.g., "0.01,0.05,0.10,0.25")
+        #[arg(long, default_value = "0.01,0.05,0.10,0.25")]
+        spike_fractions: String,
+
+        /// Fold changes to test (comma-separated, e.g., "1.5,2.0,3.0,5.0")
+        #[arg(long, default_value = "1.5,2.0,3.0,5.0")]
+        fold_changes: String,
+
+        /// Spike modes to test (comma-separated: raw,compositional,absolute)
+        #[arg(long, default_value = "raw,compositional,absolute")]
+        modes: String,
+
+        /// Number of replicates per parameter combination
+        #[arg(long, default_value = "5")]
+        replicates: usize,
+
+        /// Number of permutations for FDR calibration
+        #[arg(long, default_value = "5")]
+        permutations: usize,
+
+        /// Random seed
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Output format: text, json, or csv
+        #[arg(long, default_value = "text")]
+        output_format: String,
+
+        /// Quick mode: use fewer replicates and permutations
+        #[arg(long)]
+        quick: bool,
+    },
 }
 
 fn main() {
@@ -204,6 +266,38 @@ fn main() {
         ),
 
         Commands::Example { output } => cmd_example(&output),
+
+        Commands::Stress {
+            counts,
+            metadata,
+            group,
+            target,
+            formula,
+            test_coef,
+            spike_fractions,
+            fold_changes,
+            modes,
+            replicates,
+            permutations,
+            seed,
+            output_format,
+            quick,
+        } => cmd_stress(
+            &counts,
+            &metadata,
+            &group,
+            &target,
+            &formula,
+            &test_coef,
+            &spike_fractions,
+            &fold_changes,
+            &modes,
+            replicates,
+            permutations,
+            seed,
+            &output_format,
+            quick,
+        ),
     };
 
     if let Err(e) = result {
@@ -553,6 +647,124 @@ fn cmd_example(output_path: &PathBuf) -> Result<()> {
     eprintln!();
     eprintln!("Contents:");
     println!("{}", yaml);
+
+    Ok(())
+}
+
+/// Run compositional stress testing
+#[allow(clippy::too_many_arguments)]
+fn cmd_stress(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    group: &str,
+    target: &str,
+    formula: &str,
+    test_coef: &str,
+    spike_fractions_str: &str,
+    fold_changes_str: &str,
+    modes_str: &str,
+    replicates: usize,
+    permutations: usize,
+    seed: u64,
+    output_format: &str,
+    quick: bool,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    // Parse spike fractions
+    let spike_fractions: Vec<f64> = spike_fractions_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    // Parse fold changes
+    let fold_changes: Vec<f64> = fold_changes_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    // Parse modes
+    let modes: Vec<SpikeMode> = modes_str
+        .split(',')
+        .filter_map(|s| match s.trim().to_lowercase().as_str() {
+            "raw" => Some(SpikeMode::Raw),
+            "compositional" => Some(SpikeMode::Compositional),
+            "absolute" => Some(SpikeMode::Absolute),
+            _ => None,
+        })
+        .collect();
+
+    // Build config
+    let config = if quick {
+        StressConfig::quick()
+            .with_groups(group, target)
+    } else {
+        StressConfig::new("stress_test")
+            .with_spike_fractions(spike_fractions)
+            .with_fold_changes(fold_changes)
+            .with_modes(modes)
+            .with_groups(group, target)
+            .with_replicates(replicates, permutations)
+    };
+
+    // Calculate total runs
+    let grid_size = config.spike_fractions.len() * config.fold_changes.len() * config.spike_modes.len();
+    let total_runs = grid_size * config.n_replicates;
+
+    eprintln!("Running stress test...");
+    eprintln!("  Spike fractions: {:?}", config.spike_fractions);
+    eprintln!("  Fold changes: {:?}", config.fold_changes);
+    eprintln!("  Modes: {:?}", config.spike_modes);
+    eprintln!("  Replicates: {}", config.n_replicates);
+    eprintln!("  Permutations: {}", config.n_permutations);
+    eprintln!("  Total runs: {}", total_runs);
+    eprintln!();
+
+    // Create the pipeline closure
+    let formula_owned = formula.to_string();
+    let test_coef_owned = test_coef.to_string();
+
+    let run_pipeline = move |c: &CountMatrix, m: &Metadata| {
+        Pipeline::new()
+            .name("stress_pipeline")
+            .filter_prevalence(0.1)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm(&formula_owned)
+            .test_wald(&test_coef_owned)
+            .correct_bh()
+            .run(c, m)
+    };
+
+    // Run stress test with seed
+    let mut config_with_seed = config;
+    config_with_seed.seed = seed;
+
+    let summary = run_stress_test(&counts, &metadata, &config_with_seed, run_pipeline)?;
+
+    // Output results
+    match output_format {
+        "json" => {
+            let json = summary.to_json()?;
+            println!("{}", json);
+        }
+        "csv" => {
+            let csv = summary.to_csv();
+            print!("{}", csv);
+        }
+        _ => {
+            // Text format (default)
+            println!("{}", summary);
+        }
+    }
 
     Ok(())
 }

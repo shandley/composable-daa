@@ -8,6 +8,7 @@ mod abundance;
 mod presence;
 mod evaluate;
 mod validate;
+pub mod stress;
 
 pub use types::{
     AbundanceLevel, SpikeDiagnostics, SpikeMode, SpikeSelection, SpikeSpec, SpikedData, SpikeType,
@@ -18,4 +19,10 @@ pub use evaluate::{evaluate_spikes, SpikeEvaluation, TierMetrics};
 pub use validate::{
     run_spike_validation, run_spike_validation_presence, shuffle_labels,
     ValidationConfig, ValidationResult, ValidationSummary, PermutedEvaluation,
+};
+pub use stress::{
+    StressConfig, StressParams, StressRunResult, StressSummary,
+    AggregatedMetrics, PowerPoint, ModeComparisonSummary, ModeStats,
+    run_stress_test, generate_parameter_grid, aggregate_results,
+    calculate_power_curves, compare_modes,
 };

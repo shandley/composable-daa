@@ -47,6 +47,9 @@ pub enum DaaError {
 
     #[error("YAML serialization error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Result type alias for library operations.
