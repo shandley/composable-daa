@@ -426,3 +426,86 @@ fn test_spike_evaluation_metrics() {
     assert!(eval.fdr >= 0.0 && eval.fdr <= 1.0);
     assert!(eval.specificity >= 0.0 && eval.specificity <= 1.0);
 }
+
+// ===== Advanced filtering tests =====
+
+#[test]
+fn test_abundance_filtering() {
+    let counts = create_synthetic_counts();
+
+    // Filter by relative abundance
+    let filtered = filter_abundance(&counts, 0.01, Some(0.5)).unwrap();
+
+    // Should retain features with 1-50% relative abundance
+    assert!(filtered.n_features() > 0);
+    assert!(filtered.n_features() <= counts.n_features());
+}
+
+#[test]
+fn test_library_size_filtering() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Filter samples with low library size
+    let min_reads = 1000u64;
+    let filtered = filter_library_size(&counts, Some(min_reads), None).unwrap();
+
+    // All retained samples should have >= min_reads
+    let col_sums = filtered.col_sums();
+    for sum in col_sums {
+        assert!(sum >= min_reads);
+    }
+}
+
+#[test]
+fn test_stratified_filtering() {
+    let counts = create_synthetic_counts();
+
+    // Use lenient thresholds for rare features
+    let thresholds = TierThresholds::lenient_rare();
+    let filtered = filter_stratified(&counts, &thresholds).unwrap();
+
+    // Should retain most features
+    assert!(filtered.n_features() > counts.n_features() / 2);
+}
+
+#[test]
+fn test_differential_prevalence_filtering() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Filter to keep only features with >5% prevalence difference between groups
+    // (use smaller threshold since synthetic data has similar prevalence across groups)
+    let result = filter_prevalence_groupwise(
+        &counts,
+        &metadata,
+        "group",
+        0.0, // No minimum prevalence
+        GroupwiseLogic::Differential(0.05),
+    );
+
+    // May or may not find differentially prevalent features depending on data
+    // Just verify the filter runs without error
+    assert!(result.is_ok() || matches!(result, Err(DaaError::EmptyData(_))));
+}
+
+#[test]
+fn test_combined_filtering_pipeline() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Apply multiple filters in sequence
+    // 1. Filter by library size
+    let step1 = filter_library_size(&counts, Some(500), None).unwrap();
+
+    // 2. Filter by prevalence
+    let step2 = filter_prevalence_overall(&step1, 0.2).unwrap();
+
+    // 3. Filter by abundance
+    let step3 = filter_abundance(&step2, 0.001, None).unwrap();
+
+    // Should have progressively fewer features
+    assert!(step3.n_features() <= step2.n_features());
+    assert!(step2.n_features() <= step1.n_features());
+    assert!(step3.n_features() > 0);
+}

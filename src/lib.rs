@@ -58,7 +58,17 @@ pub mod prelude {
         PrevalenceTier, Term, Variable,
     };
     pub use crate::error::{DaaError, Result};
-    pub use crate::filter::prevalence::{filter_prevalence_groupwise, filter_prevalence_overall, GroupwiseLogic};
+    pub use crate::filter::{
+        // Prevalence filtering
+        filter_prevalence_groupwise, filter_prevalence_overall, GroupwiseLogic, FilterResult,
+        // Abundance filtering
+        filter_abundance, filter_mean_abundance, filter_total_count, AbundanceFilterResult,
+        // Library size filtering
+        filter_library_size, filter_library_size_quantile, filter_library_size_relative,
+        LibrarySizeFilterResult,
+        // Stratified filtering
+        filter_stratified, TierConfig, TierThresholds, StratifiedFilterResult,
+    };
     pub use crate::model::lm::{model_lm, LmFit};
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
     pub use crate::pipeline::{Pipeline, PipelineStep};

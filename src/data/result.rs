@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Prevalence tier classification for features.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrevalenceTier {
     /// Very rare: prevalence < 5%
     VeryRare,

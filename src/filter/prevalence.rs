@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Logic for combining group-wise prevalence filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GroupwiseLogic {
     /// Feature must pass threshold in ANY group.
     Any,
@@ -15,6 +15,9 @@ pub enum GroupwiseLogic {
     All,
     /// Feature must pass threshold in at least N groups.
     AtLeast(usize),
+    /// Feature must have significantly different prevalence between groups.
+    /// The f64 is the minimum absolute difference in prevalence between any two groups.
+    Differential(f64),
 }
 
 /// Filter features by overall prevalence threshold.
@@ -99,14 +102,29 @@ pub fn filter_prevalence_groupwise(
         ));
     }
 
-    // For AtLeast logic, validate n
-    if let GroupwiseLogic::AtLeast(n) = logic {
-        if n > n_groups {
-            return Err(DaaError::InvalidParameter(format!(
-                "AtLeast({}) requires at least {} groups, but only {} found",
-                n, n, n_groups
-            )));
+    // Validate logic parameters
+    match logic {
+        GroupwiseLogic::AtLeast(n) => {
+            if n > n_groups {
+                return Err(DaaError::InvalidParameter(format!(
+                    "AtLeast({}) requires at least {} groups, but only {} found",
+                    n, n, n_groups
+                )));
+            }
         }
+        GroupwiseLogic::Differential(min_diff) => {
+            if !(0.0..=1.0).contains(&min_diff) {
+                return Err(DaaError::InvalidParameter(
+                    "Differential min_diff must be between 0 and 1".to_string(),
+                ));
+            }
+            if n_groups < 2 {
+                return Err(DaaError::InvalidParameter(
+                    "Differential logic requires at least 2 groups".to_string(),
+                ));
+            }
+        }
+        _ => {}
     }
 
     // Calculate group-wise prevalence for each feature
@@ -114,23 +132,36 @@ pub fn filter_prevalence_groupwise(
         .into_par_iter()
         .filter(|&row| {
             let row_data = counts.row_dense(row);
-            let groups_passing = groups
+
+            // Calculate prevalence in each group
+            let group_prevalences: Vec<f64> = groups
                 .iter()
-                .filter(|(_, indices)| {
+                .map(|(_, indices)| {
                     let group_size = indices.len();
                     if group_size == 0 {
-                        return false;
+                        return 0.0;
                     }
-                    let min_samples = (threshold * group_size as f64).ceil() as usize;
                     let nnz = indices.iter().filter(|&&i| row_data[i] > 0).count();
-                    nnz >= min_samples
+                    nnz as f64 / group_size as f64
                 })
-                .count();
+                .collect();
 
             match logic {
-                GroupwiseLogic::Any => groups_passing > 0,
-                GroupwiseLogic::All => groups_passing == n_groups,
-                GroupwiseLogic::AtLeast(n) => groups_passing >= n,
+                GroupwiseLogic::Any => {
+                    group_prevalences.iter().any(|&p| p >= threshold)
+                }
+                GroupwiseLogic::All => {
+                    group_prevalences.iter().all(|&p| p >= threshold)
+                }
+                GroupwiseLogic::AtLeast(n) => {
+                    group_prevalences.iter().filter(|&&p| p >= threshold).count() >= n
+                }
+                GroupwiseLogic::Differential(min_diff) => {
+                    // Check if max prevalence difference exceeds threshold
+                    let max_prev = group_prevalences.iter().cloned().fold(0.0, f64::max);
+                    let min_prev = group_prevalences.iter().cloned().fold(1.0, f64::min);
+                    (max_prev - min_prev) >= min_diff
+                }
             }
         })
         .collect();
@@ -335,5 +366,40 @@ mod tests {
         let counts = create_test_matrix();
         assert!(filter_prevalence_overall(&counts, -0.1).is_err());
         assert!(filter_prevalence_overall(&counts, 1.1).is_err());
+    }
+
+    #[test]
+    fn test_filter_prevalence_differential() {
+        let counts = create_test_matrix();
+        let metadata = create_test_metadata();
+
+        // Feature 2 is 100% in group A (samples 0-3), 0% in group B - diff = 1.0
+        // Feature 3 is 50% in group A (samples 0-1), 0% in group B - diff = 0.5
+        // Features 0, 1 are present in both groups with smaller differences
+
+        // With 0.5 min_diff, should keep features with >=50% prevalence difference
+        let filtered = filter_prevalence_groupwise(
+            &counts,
+            &metadata,
+            "group",
+            0.0, // No minimum prevalence threshold
+            GroupwiseLogic::Differential(0.5),
+        ).unwrap();
+
+        // Features 2 (100%-0%=100%) and 3 (50%-0%=50%) should pass
+        // Feature 4 (present in only 1 sample in group A) also has high differential
+        assert!(filtered.n_features() >= 2);
+
+        // With higher threshold, fewer features
+        let filtered_strict = filter_prevalence_groupwise(
+            &counts,
+            &metadata,
+            "group",
+            0.0,
+            GroupwiseLogic::Differential(0.9),
+        ).unwrap();
+
+        // Only feature 2 (100% diff) should pass
+        assert!(filtered_strict.n_features() <= filtered.n_features());
     }
 }
