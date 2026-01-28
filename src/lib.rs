@@ -71,6 +71,7 @@ pub mod prelude {
     };
     pub use crate::model::lm::{model_lm, LmFit};
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
+    pub use crate::normalize::tss::{norm_tss, norm_tss_with_pseudocount, TssMatrix, scale as tss_scale};
     pub use crate::pipeline::{Pipeline, PipelineStep, StratifiedPreset};
     pub use crate::profile::{
         LibrarySizeProfile, PrevalenceProfile, SparsityProfile,

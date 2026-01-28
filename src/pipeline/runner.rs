@@ -10,7 +10,7 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::model::model_lm;
-use crate::normalize::{norm_clr, TransformedMatrix};
+use crate::normalize::{norm_clr, norm_tss, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::test_wald;
 use crate::zero::pseudocount::add_pseudocount;
@@ -61,6 +61,8 @@ pub enum PipelineStep {
     // === Normalization ===
     /// Apply CLR normalization.
     NormalizeCLR,
+    /// Apply TSS normalization (relative abundances).
+    NormalizeTSS { scale_factor: f64 },
 
     // === Model Fitting ===
     /// Fit linear model.
@@ -255,6 +257,25 @@ impl Pipeline {
         self
     }
 
+    /// Add TSS normalization (relative abundances).
+    ///
+    /// TSS divides each count by the sample total, converting to proportions.
+    /// A scale factor can be applied (1.0 for proportions, 1e6 for CPM).
+    pub fn normalize_tss(mut self, scale_factor: f64) -> Self {
+        self.steps.push(PipelineStep::NormalizeTSS { scale_factor });
+        self
+    }
+
+    /// Add TSS normalization as proportions (scale_factor = 1.0).
+    pub fn normalize_tss_proportions(self) -> Self {
+        self.normalize_tss(1.0)
+    }
+
+    /// Add TSS normalization as CPM (counts per million).
+    pub fn normalize_tss_cpm(self) -> Self {
+        self.normalize_tss(1_000_000.0)
+    }
+
     /// Add linear model.
     pub fn model_lm(mut self, formula: &str) -> Self {
         self.steps.push(PipelineStep::ModelLM {
@@ -414,6 +435,14 @@ impl PipelineState {
                     self.counts.feature_ids().to_vec(),
                     self.counts.sample_ids().to_vec(),
                 )?);
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
+            PipelineStep::NormalizeTSS { scale_factor } => {
+                // TSS works directly on counts (no pseudocount required)
+                let tss_result = norm_tss(&self.counts, *scale_factor)?;
+                self.transformed = Some(tss_result.to_transformed());
                 // Store prevalence profile for results
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
