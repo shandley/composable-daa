@@ -340,6 +340,54 @@ impl Metadata {
     pub fn has_column(&self, column: &str) -> bool {
         self.column_names.contains(&column.to_string())
     }
+
+    /// Create a new Metadata with a column's values shuffled (permuted).
+    ///
+    /// This is useful for permutation tests where you want to break
+    /// the association between a variable and the outcome.
+    ///
+    /// # Arguments
+    /// * `column` - Column name to shuffle
+    /// * `shuffled_values` - Pre-shuffled values in the same order as sample_ids
+    ///
+    /// # Returns
+    /// New Metadata with the shuffled column values.
+    pub fn with_shuffled_column(
+        &self,
+        column: &str,
+        shuffled_values: &[Option<&Variable>],
+    ) -> Result<Self> {
+        if !self.has_column(column) {
+            return Err(DaaError::MissingColumn(column.to_string()));
+        }
+
+        if shuffled_values.len() != self.sample_ids.len() {
+            return Err(DaaError::SampleMismatch(format!(
+                "Shuffled values length ({}) doesn't match sample count ({})",
+                shuffled_values.len(),
+                self.sample_ids.len()
+            )));
+        }
+
+        let mut new_data = self.data.clone();
+
+        for (idx, sample_id) in self.sample_ids.iter().enumerate() {
+            if let Some(sample_data) = new_data.get_mut(sample_id) {
+                if let Some(new_value) = shuffled_values[idx] {
+                    sample_data.insert(column.to_string(), new_value.clone());
+                } else {
+                    sample_data.insert(column.to_string(), Variable::Missing);
+                }
+            }
+        }
+
+        Ok(Self {
+            sample_ids: self.sample_ids.clone(),
+            column_names: self.column_names.clone(),
+            data: new_data,
+            column_types: self.column_types.clone(),
+        })
+    }
 }
 
 impl Default for Metadata {

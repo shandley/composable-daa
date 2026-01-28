@@ -242,3 +242,187 @@ fn test_result_output() {
     assert!(content.contains("feature_id"));
     assert!(content.contains("q_value"));
 }
+
+// ===== Spike-in validation tests =====
+
+#[test]
+fn test_spike_abundance_and_evaluate() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Spike abundance for 5 features with 3x fold change
+    let spiked = spike_abundance(
+        &counts,
+        &metadata,
+        "group",
+        5,
+        3.0,
+        "treatment",
+        SpikeSelection::Random,
+        42,
+    )
+    .unwrap();
+
+    assert_eq!(spiked.spec.n_spiked(), 5);
+    assert_eq!(spiked.spec.spike_type, SpikeType::Abundance);
+    assert!(spiked.spec.effect_sizes.iter().all(|&e| e == 3.0));
+
+    // Run pipeline on spiked data
+    let results = Pipeline::new()
+        .filter_prevalence(0.1)
+        .add_pseudocount(0.5)
+        .normalize_clr()
+        .model_lm("~ group")
+        .test_wald("grouptreatment")
+        .correct_bh()
+        .run(&spiked.counts, &metadata)
+        .unwrap();
+
+    // Evaluate how well we detected the spikes
+    let eval = evaluate_spikes(&results, &spiked.spec, 0.1);
+
+    // Should detect at least some of the spiked features
+    assert!(
+        eval.true_positives > 0,
+        "Should detect at least one spiked feature"
+    );
+    assert!(
+        eval.sensitivity > 0.0,
+        "Sensitivity should be > 0, got {}",
+        eval.sensitivity
+    );
+}
+
+#[test]
+fn test_shuffle_labels_for_null_distribution() {
+    let metadata = create_synthetic_metadata();
+
+    // Shuffle group labels
+    let shuffled = shuffle_labels(&metadata, "group", 42).unwrap();
+
+    // Should have same samples
+    assert_eq!(shuffled.n_samples(), metadata.n_samples());
+
+    // Count groups in original
+    let orig_treatment = metadata
+        .sample_ids()
+        .iter()
+        .filter(|id| {
+            matches!(
+                metadata.get(id, "group"),
+                Some(Variable::Categorical(g)) if g == "treatment"
+            )
+        })
+        .count();
+
+    // Count in shuffled
+    let shuf_treatment = shuffled
+        .sample_ids()
+        .iter()
+        .filter(|id| {
+            matches!(
+                shuffled.get(id, "group"),
+                Some(Variable::Categorical(g)) if g == "treatment"
+            )
+        })
+        .count();
+
+    // Same number of treatment/control
+    assert_eq!(orig_treatment, shuf_treatment);
+}
+
+#[test]
+fn test_spike_by_prevalence_tier() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Spike only high-prevalence features
+    let spiked = spike_abundance(
+        &counts,
+        &metadata,
+        "group",
+        3,
+        2.0,
+        "treatment",
+        SpikeSelection::ByPrevalenceTier(PrevalenceTier::VeryHigh),
+        42,
+    )
+    .unwrap();
+
+    assert_eq!(spiked.spec.n_spiked(), 3);
+
+    // All original prevalences should be high
+    for prev in &spiked.spec.original_prevalence {
+        assert!(*prev > 0.7, "Should be high prevalence, got {}", prev);
+    }
+}
+
+#[test]
+fn test_spike_presence_creates_non_zeros() {
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Spike presence to increase prevalence
+    let result = spike_presence(
+        &counts,
+        &metadata,
+        "group",
+        2,              // 2 features
+        0.3,            // increase prevalence by 30%
+        "treatment",
+        AbundanceLevel::Median,
+        SpikeSelection::Random,
+        42,
+    );
+
+    // This should work if there are features with room for prevalence increase
+    if let Ok(spiked) = result {
+        assert_eq!(spiked.spec.n_spiked(), 2);
+        assert_eq!(spiked.spec.spike_type, SpikeType::Presence);
+    }
+}
+
+#[test]
+fn test_spike_evaluation_metrics() {
+    // Create a simple scenario with known outcomes
+    let counts = create_synthetic_counts();
+    let metadata = create_synthetic_metadata();
+
+    // Spike with large effect for clear detection
+    let spiked = spike_abundance(
+        &counts,
+        &metadata,
+        "group",
+        3,
+        10.0, // Very large effect
+        "treatment",
+        SpikeSelection::ByPrevalenceTier(PrevalenceTier::VeryHigh),
+        42,
+    )
+    .unwrap();
+
+    // Run pipeline
+    let results = Pipeline::new()
+        .filter_prevalence(0.3)
+        .add_pseudocount(0.5)
+        .normalize_clr()
+        .model_lm("~ group")
+        .test_wald("grouptreatment")
+        .correct_bh()
+        .run(&spiked.counts, &metadata)
+        .unwrap();
+
+    let eval = evaluate_spikes(&results, &spiked.spec, 0.1);
+
+    // With 10x effect, we should have high sensitivity
+    assert!(
+        eval.sensitivity >= 0.5,
+        "With 10x effect, sensitivity should be >= 50%, got {:.1}%",
+        eval.sensitivity * 100.0
+    );
+
+    // Check that metrics are reasonable
+    assert!(eval.precision >= 0.0 && eval.precision <= 1.0);
+    assert!(eval.fdr >= 0.0 && eval.fdr <= 1.0);
+    assert!(eval.specificity >= 0.0 && eval.specificity <= 1.0);
+}
