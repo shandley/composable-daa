@@ -1,0 +1,21 @@
+[package]
+name = "composable-daa"
+version = "0.1.0"
+edition = "2021"
+description = "Composable differential abundance analysis for microbiome data"
+license = "MIT"
+authors = ["Scott Handley"]
+
+[dependencies]
+sprs = "0.11"
+nalgebra = "0.33"
+statrs = "0.17"
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "2.0"
+csv = "1.3"
+
+[dev-dependencies]
+approx = "0.5"
+tempfile = "3.14"
