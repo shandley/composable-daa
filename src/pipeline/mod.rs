@@ -2,4 +2,4 @@
 
 mod runner;
 
-pub use runner::{Pipeline, PipelineConfig, PipelineStep, run_linda};
+pub use runner::{Pipeline, PipelineConfig, PipelineStep, StratifiedPreset, run_linda};

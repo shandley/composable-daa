@@ -3,7 +3,12 @@
 use crate::correct::{bh::correct_bh_wald, bh::create_results};
 use crate::data::{CountMatrix, DaResultSet, DesignMatrix, Formula, Metadata};
 use crate::error::{DaaError, Result};
-use crate::filter::{filter_prevalence_groupwise, filter_prevalence_overall, GroupwiseLogic};
+use crate::filter::{
+    filter_abundance, filter_library_size, filter_library_size_quantile,
+    filter_library_size_relative, filter_mean_abundance, filter_prevalence_groupwise,
+    filter_prevalence_overall, filter_stratified, filter_total_count, GroupwiseLogic,
+    TierThresholds,
+};
 use crate::model::model_lm;
 use crate::normalize::{norm_clr, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
@@ -14,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// A step in the analysis pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PipelineStep {
+    // === Feature Filtering ===
     /// Filter by overall prevalence threshold.
     FilterPrevalence { threshold: f64 },
     /// Filter by group-wise prevalence.
@@ -22,16 +28,64 @@ pub enum PipelineStep {
         group_column: String,
         logic: GroupwiseLogic,
     },
+    /// Filter by relative abundance range.
+    FilterAbundance {
+        min_abundance: f64,
+        max_abundance: Option<f64>,
+    },
+    /// Filter by mean abundance when present.
+    FilterMeanAbundance { min_mean: f64 },
+    /// Filter by total count across samples.
+    FilterTotalCount { min_total: u64 },
+    /// Filter using stratified thresholds by prevalence tier.
+    FilterStratified { preset: StratifiedPreset },
+
+    // === Sample Filtering ===
+    /// Filter samples by library size (total reads).
+    FilterLibrarySize {
+        min_reads: Option<u64>,
+        max_reads: Option<u64>,
+    },
+    /// Filter samples by library size quantile.
+    FilterLibrarySizeQuantile {
+        lower_quantile: f64,
+        upper_quantile: f64,
+    },
+    /// Filter samples by library size relative to median.
+    FilterLibrarySizeRelative { min_fraction_of_median: f64 },
+
+    // === Zero Handling ===
     /// Add pseudocount for zero handling.
     AddPseudocount { value: f64 },
+
+    // === Normalization ===
     /// Apply CLR normalization.
     NormalizeCLR,
+
+    // === Model Fitting ===
     /// Fit linear model.
     ModelLM { formula: String },
+
+    // === Testing ===
     /// Wald test for a coefficient.
     TestWald { coefficient: String },
+
+    // === Multiple Testing Correction ===
     /// Benjamini-Hochberg correction.
     CorrectBH,
+}
+
+/// Preset configurations for stratified filtering.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum StratifiedPreset {
+    /// Very permissive, keeps most features.
+    Permissive,
+    /// Lenient on rare features (higher abundance requirement for rare).
+    LenientRare,
+    /// Strict filtering (removes most rare features).
+    Strict,
+    /// Custom thresholds (use with `filter_stratified_custom`).
+    Custom,
 }
 
 /// Pipeline configuration for serialization.
@@ -111,6 +165,81 @@ impl Pipeline {
             group_column: group_column.to_string(),
             logic,
         });
+        self
+    }
+
+    /// Filter features by relative abundance range.
+    ///
+    /// Keeps features whose mean relative abundance falls within the specified range.
+    pub fn filter_abundance(mut self, min_abundance: f64, max_abundance: Option<f64>) -> Self {
+        self.steps.push(PipelineStep::FilterAbundance {
+            min_abundance,
+            max_abundance,
+        });
+        self
+    }
+
+    /// Filter features by mean abundance when present.
+    ///
+    /// Keeps features whose mean count (when non-zero) meets the threshold.
+    pub fn filter_mean_abundance(mut self, min_mean: f64) -> Self {
+        self.steps
+            .push(PipelineStep::FilterMeanAbundance { min_mean });
+        self
+    }
+
+    /// Filter features by total count across all samples.
+    pub fn filter_total_count(mut self, min_total: u64) -> Self {
+        self.steps
+            .push(PipelineStep::FilterTotalCount { min_total });
+        self
+    }
+
+    /// Filter features using stratified thresholds by prevalence tier.
+    ///
+    /// Uses preset configurations:
+    /// - `Permissive`: Very lenient, keeps most features
+    /// - `LenientRare`: Higher requirements for rare features
+    /// - `Strict`: Removes most rare and low-abundance features
+    pub fn filter_stratified(mut self, preset: StratifiedPreset) -> Self {
+        self.steps.push(PipelineStep::FilterStratified { preset });
+        self
+    }
+
+    /// Filter samples by library size (total reads).
+    ///
+    /// Removes samples with too few or too many total counts.
+    pub fn filter_library_size(mut self, min_reads: Option<u64>, max_reads: Option<u64>) -> Self {
+        self.steps.push(PipelineStep::FilterLibrarySize {
+            min_reads,
+            max_reads,
+        });
+        self
+    }
+
+    /// Filter samples by library size quantile.
+    ///
+    /// Removes samples in the lower or upper quantiles of the library size distribution.
+    pub fn filter_library_size_quantile(
+        mut self,
+        lower_quantile: f64,
+        upper_quantile: f64,
+    ) -> Self {
+        self.steps.push(PipelineStep::FilterLibrarySizeQuantile {
+            lower_quantile,
+            upper_quantile,
+        });
+        self
+    }
+
+    /// Filter samples by library size relative to median.
+    ///
+    /// Removes samples with library size below a fraction of the median.
+    pub fn filter_library_size_relative(mut self, min_fraction_of_median: f64) -> Self {
+        self.steps
+            .push(PipelineStep::FilterLibrarySizeRelative {
+                min_fraction_of_median,
+            });
         self
     }
 
@@ -201,6 +330,7 @@ impl PipelineState {
 
     fn apply(mut self, step: &PipelineStep) -> Result<Self> {
         match step {
+            // === Feature Filtering ===
             PipelineStep::FilterPrevalence { threshold } => {
                 self.counts = filter_prevalence_overall(&self.counts, *threshold)?;
             }
@@ -217,9 +347,64 @@ impl PipelineState {
                     *logic,
                 )?;
             }
+            PipelineStep::FilterAbundance {
+                min_abundance,
+                max_abundance,
+            } => {
+                self.counts = filter_abundance(&self.counts, *min_abundance, *max_abundance)?;
+            }
+            PipelineStep::FilterMeanAbundance { min_mean } => {
+                self.counts = filter_mean_abundance(&self.counts, *min_mean)?;
+            }
+            PipelineStep::FilterTotalCount { min_total } => {
+                self.counts = filter_total_count(&self.counts, *min_total)?;
+            }
+            PipelineStep::FilterStratified { preset } => {
+                let thresholds = match preset {
+                    StratifiedPreset::Permissive => TierThresholds::new(),
+                    StratifiedPreset::LenientRare => TierThresholds::lenient_rare(),
+                    StratifiedPreset::Strict => TierThresholds::strict(),
+                    StratifiedPreset::Custom => {
+                        return Err(DaaError::Pipeline(
+                            "Custom stratified filtering requires filter_stratified_custom()"
+                                .to_string(),
+                        ));
+                    }
+                };
+                self.counts = filter_stratified(&self.counts, &thresholds)?;
+            }
+
+            // === Sample Filtering ===
+            PipelineStep::FilterLibrarySize {
+                min_reads,
+                max_reads,
+            } => {
+                self.counts = filter_library_size(&self.counts, *min_reads, *max_reads)?;
+                // Also filter metadata to keep in sync
+                self.metadata = self.metadata.subset_samples(self.counts.sample_ids())?;
+            }
+            PipelineStep::FilterLibrarySizeQuantile {
+                lower_quantile,
+                upper_quantile,
+            } => {
+                self.counts =
+                    filter_library_size_quantile(&self.counts, *lower_quantile, *upper_quantile)?;
+                self.metadata = self.metadata.subset_samples(self.counts.sample_ids())?;
+            }
+            PipelineStep::FilterLibrarySizeRelative {
+                min_fraction_of_median,
+            } => {
+                self.counts =
+                    filter_library_size_relative(&self.counts, *min_fraction_of_median)?;
+                self.metadata = self.metadata.subset_samples(self.counts.sample_ids())?;
+            }
+
+            // === Zero Handling ===
             PipelineStep::AddPseudocount { value } => {
                 self.pseudocount_data = Some(add_pseudocount(&self.counts, *value)?);
             }
+
+            // === Normalization ===
             PipelineStep::NormalizeCLR => {
                 let data = self.pseudocount_data.as_ref().ok_or_else(|| {
                     DaaError::Pipeline("Must add pseudocount before CLR".to_string())
@@ -232,6 +417,8 @@ impl PipelineState {
                 // Store prevalence profile for results
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
+
+            // === Model Fitting ===
             PipelineStep::ModelLM { formula } => {
                 let parsed_formula = Formula::parse(formula)?;
                 self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
@@ -241,12 +428,16 @@ impl PipelineState {
                 let design = self.design.as_ref().unwrap();
                 self.lm_fit = Some(model_lm(transformed, design)?);
             }
+
+            // === Testing ===
             PipelineStep::TestWald { coefficient } => {
                 let fit = self.lm_fit.as_ref().ok_or_else(|| {
                     DaaError::Pipeline("Must fit model before Wald test".to_string())
                 })?;
                 self.wald_result = Some(test_wald(fit, coefficient)?);
             }
+
+            // === Correction ===
             PipelineStep::CorrectBH => {
                 let wald = self.wald_result.as_ref().ok_or_else(|| {
                     DaaError::Pipeline("Must perform Wald test before BH correction".to_string())
@@ -459,5 +650,108 @@ mod tests {
             .run(&counts, &metadata);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_with_abundance_filter() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let results = Pipeline::new()
+            .name("test-abundance")
+            .filter_abundance(0.001, None) // Keep features with >= 0.1% abundance
+            .filter_prevalence(0.3)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_pipeline_with_library_size_filter() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let results = Pipeline::new()
+            .name("test-libsize")
+            .filter_library_size(Some(100), None) // Minimum 100 reads per sample
+            .filter_prevalence(0.3)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_pipeline_with_stratified_filter() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let results = Pipeline::new()
+            .name("test-stratified")
+            .filter_stratified(StratifiedPreset::LenientRare)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_pipeline_with_multiple_filters() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // Apply multiple filters in sequence
+        let results = Pipeline::new()
+            .name("test-multi-filter")
+            .filter_library_size(Some(50), None)
+            .filter_prevalence(0.2)
+            .filter_mean_abundance(5.0)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_pipeline_config_with_new_filters() {
+        let pipeline = Pipeline::new()
+            .name("advanced")
+            .filter_library_size(Some(1000), None)
+            .filter_abundance(0.001, Some(0.5))
+            .filter_stratified(StratifiedPreset::Strict)
+            .add_pseudocount(1.0)
+            .normalize_clr()
+            .model_lm("~ treatment")
+            .test_wald("treatmentYes")
+            .correct_bh();
+
+        let config = pipeline.to_config(Some("Advanced filtering pipeline"));
+        let yaml = config.to_yaml().unwrap();
+
+        // Verify it can be parsed back
+        let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
+        assert_eq!(parsed.name, "advanced");
+        assert_eq!(parsed.steps.len(), 8);
     }
 }
