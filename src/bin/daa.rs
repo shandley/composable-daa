@@ -2,13 +2,34 @@
 //!
 //! Command-line interface for composable differential abundance analysis.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use composable_daa::data::{CountMatrix, Metadata};
 use composable_daa::error::Result;
 use composable_daa::pipeline::{Pipeline, PipelineConfig};
 use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity};
-use composable_daa::spike::{evaluate_spikes, spike_abundance, SpikeSelection};
+use composable_daa::spike::{evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection};
 use std::path::PathBuf;
+
+/// CLI-friendly spike mode enum
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSpikeMode {
+    /// Raw multiplication of counts (increases library size)
+    Raw,
+    /// Spike then renormalize to original library size
+    Compositional,
+    /// Model absolute changes then renormalize (most realistic)
+    Absolute,
+}
+
+impl From<CliSpikeMode> for SpikeMode {
+    fn from(mode: CliSpikeMode) -> Self {
+        match mode {
+            CliSpikeMode::Raw => SpikeMode::Raw,
+            CliSpikeMode::Compositional => SpikeMode::Compositional,
+            CliSpikeMode::Absolute => SpikeMode::Absolute,
+        }
+    }
+}
 
 /// Composable Differential Abundance Analysis
 #[derive(Parser)]
@@ -119,6 +140,13 @@ enum Commands {
         /// Random seed (default: 42)
         #[arg(long, default_value = "42")]
         seed: u64,
+
+        /// Spike mode: how to handle compositional constraints
+        /// - raw: Simple multiplication (increases library size)
+        /// - compositional: Renormalize to preserve library size
+        /// - absolute: Model true absolute changes (most realistic)
+        #[arg(long, value_enum, default_value = "compositional")]
+        mode: CliSpikeMode,
     },
 
     /// Generate an example pipeline configuration
@@ -170,8 +198,9 @@ fn main() {
             n_spike,
             fold_change,
             seed,
+            mode,
         } => cmd_validate(
-            &counts, &metadata, &group, &target, &formula, &test_coef, n_spike, fold_change, seed,
+            &counts, &metadata, &group, &target, &formula, &test_coef, n_spike, fold_change, seed, mode,
         ),
 
         Commands::Example { output } => cmd_example(&output),
@@ -398,6 +427,7 @@ fn cmd_validate(
     n_spike: usize,
     fold_change: f64,
     seed: u64,
+    mode: CliSpikeMode,
 ) -> Result<()> {
     eprintln!("Loading data...");
     let counts = CountMatrix::from_tsv(counts_path)?;
@@ -409,8 +439,14 @@ fn cmd_validate(
         counts.n_samples()
     );
 
-    eprintln!("Spiking {} features with {}x fold change...", n_spike, fold_change);
-    let spiked = spike_abundance(
+    let mode_name = match mode {
+        CliSpikeMode::Raw => "raw",
+        CliSpikeMode::Compositional => "compositional",
+        CliSpikeMode::Absolute => "absolute",
+    };
+    eprintln!("Spiking {} features with {}x fold change ({} mode)...", n_spike, fold_change, mode_name);
+
+    let spiked = spike_abundance_with_mode(
         &counts,
         &metadata,
         group,
@@ -419,6 +455,7 @@ fn cmd_validate(
         target,
         SpikeSelection::Random,
         seed,
+        mode.into(),
     )?;
 
     eprintln!("Running pipeline on spiked data...");
@@ -442,7 +479,21 @@ fn cmd_validate(
     println!("  Features spiked: {}", n_spike);
     println!("  Fold change:     {}x", fold_change);
     println!("  Target group:    {}", target);
+    println!("  Spike mode:      {}", mode_name);
     println!();
+
+    // Print diagnostics if available
+    if let Some(diag) = &spiked.spec.diagnostics {
+        println!("Compositional Diagnostics:");
+        println!("  Geometric mean ratio:  {:.3}", diag.geometric_mean_ratio);
+        println!("  Effective CLR effect:  {:.3}", diag.effective_clr_effect);
+        println!("  Nominal log(FC):       {:.3}", fold_change.ln());
+        if let Some(warning) = &diag.compositional_warning {
+            println!("  Warning: {}", warning);
+        }
+        println!();
+    }
+
     println!("Detection (at FDR < 5%):");
     println!("  True positives:  {}", eval.true_positives);
     println!("  False positives: {}", eval.false_positives);

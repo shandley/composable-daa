@@ -41,6 +41,61 @@ pub enum AbundanceLevel {
     Fixed(u64),
 }
 
+/// How the spike-in handles compositional constraints.
+///
+/// Microbiome sequencing data is inherently compositional - we only observe
+/// relative abundances, not absolute. Different spike modes model different
+/// assumptions about what a "true" biological effect looks like in the data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SpikeMode {
+    /// Raw multiplication of counts (default).
+    ///
+    /// Simply multiplies non-zero counts by the fold change. This increases
+    /// library size for affected samples, which may not reflect biological
+    /// reality but tests whether methods can detect inflated counts.
+    #[default]
+    Raw,
+
+    /// Compositional mode: spike then renormalize to original library size.
+    ///
+    /// After applying the fold change, scales all counts so that the total
+    /// library size remains unchanged. This models the scenario where one
+    /// taxon increases in relative abundance while others decrease proportionally,
+    /// as would be observed in real sequencing data with fixed depth.
+    Compositional,
+
+    /// Absolute mode: model what true absolute changes look like post-sequencing.
+    ///
+    /// Simulates a scenario where the spiked taxa truly increased in absolute
+    /// abundance while others stayed constant, then the sample was sequenced
+    /// at a fixed depth. This is the most biologically realistic model but
+    /// results in smaller observed fold changes due to the compositional closure.
+    Absolute,
+}
+
+/// Diagnostic information about the compositional effects of spiking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpikeDiagnostics {
+    /// Original geometric mean of counts (per affected sample, averaged).
+    pub original_geometric_mean: f64,
+    /// Geometric mean after spiking.
+    pub spiked_geometric_mean: f64,
+    /// Ratio of geometric means (indicates compositional shift).
+    pub geometric_mean_ratio: f64,
+    /// Nominal fold change requested.
+    pub nominal_fold_change: f64,
+    /// Effective CLR effect size (accounting for geometric mean shift).
+    pub effective_clr_effect: f64,
+    /// Library size change factor (1.0 for Compositional mode).
+    pub library_size_factor: f64,
+    /// Number of features spiked.
+    pub n_spiked: usize,
+    /// Total features in matrix.
+    pub n_total_features: usize,
+    /// Warning if compositional effects may dominate.
+    pub compositional_warning: Option<String>,
+}
+
 /// Specification of a spike-in experiment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpikeSpec {
@@ -56,6 +111,10 @@ pub struct SpikeSpec {
     pub original_prevalence: Vec<f64>,
     /// Random seed used.
     pub seed: u64,
+    /// Spike mode used (Raw, Compositional, or Absolute).
+    pub mode: SpikeMode,
+    /// Diagnostic information about compositional effects.
+    pub diagnostics: Option<SpikeDiagnostics>,
 }
 
 impl SpikeSpec {
@@ -75,6 +134,31 @@ impl SpikeSpec {
             affected_group,
             original_prevalence,
             seed,
+            mode: SpikeMode::Raw,
+            diagnostics: None,
+        }
+    }
+
+    /// Create a new spike specification with mode and diagnostics.
+    pub fn with_diagnostics(
+        spike_type: SpikeType,
+        spiked_features: Vec<String>,
+        effect_sizes: Vec<f64>,
+        affected_group: String,
+        original_prevalence: Vec<f64>,
+        seed: u64,
+        mode: SpikeMode,
+        diagnostics: SpikeDiagnostics,
+    ) -> Self {
+        Self {
+            spike_type,
+            spiked_features,
+            effect_sizes,
+            affected_group,
+            original_prevalence,
+            seed,
+            mode,
+            diagnostics: Some(diagnostics),
         }
     }
 

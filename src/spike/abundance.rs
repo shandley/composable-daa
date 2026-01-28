@@ -3,7 +3,7 @@
 use crate::data::{CountMatrix, Metadata, PrevalenceTier, Variable};
 use crate::error::{DaaError, Result};
 use crate::profile::profile_prevalence;
-use crate::spike::types::{SpikeSelection, SpikeSpec, SpikeType, SpikedData};
+use crate::spike::types::{SpikeDiagnostics, SpikeMode, SpikeSelection, SpikeSpec, SpikeType, SpikedData};
 use sprs::TriMat;
 use std::collections::HashSet;
 
@@ -39,6 +39,7 @@ impl SimpleRng {
 ///
 /// This injects a known multiplicative effect into the data, simulating
 /// differential abundance. Only non-zero counts are modified (zeros remain zeros).
+/// Uses Raw mode (simple multiplication) by default.
 ///
 /// # Arguments
 /// * `counts` - Original count matrix
@@ -61,6 +62,53 @@ pub fn spike_abundance(
     target_group: &str,
     selection: SpikeSelection,
     seed: u64,
+) -> Result<SpikedData> {
+    spike_abundance_with_mode(
+        counts,
+        metadata,
+        group_column,
+        n_spike,
+        fold_change,
+        target_group,
+        selection,
+        seed,
+        SpikeMode::Raw,
+    )
+}
+
+/// Spike abundance with explicit mode control.
+///
+/// This version allows specifying how the spike should handle compositional constraints:
+///
+/// - **Raw**: Simple multiplication of counts. Library size increases for spiked samples.
+/// - **Compositional**: Spike then renormalize to original library size. Models relative
+///   abundance changes while keeping total reads constant.
+/// - **Absolute**: Models what true absolute changes look like after sequencing at fixed
+///   depth. The most biologically realistic but results in smaller observed effects.
+///
+/// # Arguments
+/// * `counts` - Original count matrix
+/// * `metadata` - Sample metadata
+/// * `group_column` - Column name defining groups
+/// * `n_spike` - Number of features to spike
+/// * `fold_change` - Multiplicative factor (e.g., 2.0 for 2x increase)
+/// * `target_group` - Group to receive the increased abundance
+/// * `selection` - How to select features for spiking
+/// * `seed` - Random seed for reproducibility
+/// * `mode` - How to handle compositional constraints
+///
+/// # Returns
+/// SpikedData containing modified counts, spike specification, and diagnostics.
+pub fn spike_abundance_with_mode(
+    counts: &CountMatrix,
+    metadata: &Metadata,
+    group_column: &str,
+    n_spike: usize,
+    fold_change: f64,
+    target_group: &str,
+    selection: SpikeSelection,
+    seed: u64,
+    mode: SpikeMode,
 ) -> Result<SpikedData> {
     if fold_change <= 0.0 {
         return Err(DaaError::InvalidParameter(
@@ -106,24 +154,27 @@ pub fn spike_abundance(
         .map(|&i| prevalence_profile.feature_prevalence[i])
         .collect();
 
-    // Create modified count matrix
-    let (spiked_counts, spiked_feature_ids) = apply_abundance_spike(
+    // Create modified count matrix based on mode
+    let (spiked_counts, spiked_feature_ids, diagnostics) = apply_abundance_spike_with_mode(
         counts,
         &selected_features,
         &target_samples,
         fold_change,
+        mode,
     )?;
 
     // Build effect sizes (same fold_change for all)
     let effect_sizes = vec![fold_change; n_spike];
 
-    let spec = SpikeSpec::new(
+    let spec = SpikeSpec::with_diagnostics(
         SpikeType::Abundance,
         spiked_feature_ids,
         effect_sizes,
         target_group.to_string(),
         original_prevalence,
         seed,
+        mode,
+        diagnostics,
     );
 
     Ok(SpikedData::new(spiked_counts, spec, counts.clone()))
@@ -206,28 +257,110 @@ fn get_eligible_features(
     }
 }
 
-/// Apply the abundance spike to selected features.
-fn apply_abundance_spike(
+/// Apply the abundance spike to selected features with mode-specific handling.
+fn apply_abundance_spike_with_mode(
     counts: &CountMatrix,
     feature_indices: &[usize],
     target_samples: &[usize],
     fold_change: f64,
-) -> Result<(CountMatrix, Vec<String>)> {
+    mode: SpikeMode,
+) -> Result<(CountMatrix, Vec<String>, SpikeDiagnostics)> {
     let n_features = counts.n_features();
     let n_samples = counts.n_samples();
-    let target_set: HashSet<usize> = target_samples.iter().cloned().collect();
     let feature_set: HashSet<usize> = feature_indices.iter().cloned().collect();
 
-    let mut tri_mat = TriMat::new((n_features, n_samples));
+    // Calculate original library sizes and geometric means for target samples
+    let col_sums = counts.col_sums();
+    let original_lib_sizes: Vec<u64> = target_samples.iter().map(|&s| col_sums[s]).collect();
 
+    // Calculate original geometric mean (using pseudocount of 1 to handle zeros)
+    let orig_geo_means: Vec<f64> = target_samples
+        .iter()
+        .map(|&s| {
+            let mut log_sum = 0.0;
+            for row in 0..n_features {
+                let val = counts.get(row, s);
+                log_sum += (val as f64 + 1.0).ln();
+            }
+            (log_sum / n_features as f64).exp()
+        })
+        .collect();
+    let avg_orig_geo_mean: f64 = orig_geo_means.iter().sum::<f64>() / orig_geo_means.len() as f64;
+
+    // First pass: apply raw spike to get intermediate counts
+    let mut spiked_values: Vec<Vec<u64>> = Vec::with_capacity(n_features);
     for row in 0..n_features {
         let row_data = counts.row_dense(row);
-        for col in 0..n_samples {
-            let mut val = row_data[col];
-            if val > 0 && feature_set.contains(&row) && target_set.contains(&col) {
-                // Apply fold change
-                val = ((val as f64) * fold_change).round() as u64;
+        let mut new_row: Vec<u64> = row_data.clone();
+        for &col in target_samples {
+            if row_data[col] > 0 && feature_set.contains(&row) {
+                new_row[col] = ((row_data[col] as f64) * fold_change).round() as u64;
             }
+        }
+        spiked_values.push(new_row);
+    }
+
+    // Apply mode-specific adjustments
+    let library_size_factor = match mode {
+        SpikeMode::Raw => {
+            // No adjustment - library size increases
+            1.0
+        }
+        SpikeMode::Compositional => {
+            // Renormalize each target sample to original library size
+            for (i, &col) in target_samples.iter().enumerate() {
+                let new_lib_size: u64 = spiked_values.iter().map(|row| row[col]).sum();
+                if new_lib_size > 0 {
+                    let scale = original_lib_sizes[i] as f64 / new_lib_size as f64;
+                    for row in spiked_values.iter_mut() {
+                        row[col] = ((row[col] as f64) * scale).round() as u64;
+                    }
+                }
+            }
+            1.0 // Library size preserved
+        }
+        SpikeMode::Absolute => {
+            // Model absolute increase: spiked taxa increase, others stay same in absolute terms,
+            // then renormalize to original library size (simulating fixed sequencing depth)
+            //
+            // This is equivalent to: increase spiked features by fold_change, then divide
+            // everything by the new total to get back to original library size.
+            // The effective fold change for spiked features becomes:
+            // new_rel = (old_abs * FC) / new_total = (old_rel * FC) / (1 + delta)
+            // where delta = sum of increases / original total
+
+            for (i, &col) in target_samples.iter().enumerate() {
+                // Calculate how much the spiked features increased
+                let original_spiked_sum: u64 = feature_indices
+                    .iter()
+                    .map(|&row| counts.get(row, col))
+                    .sum();
+                let new_spiked_sum: u64 = feature_indices
+                    .iter()
+                    .map(|&row| spiked_values[row][col])
+                    .sum();
+                let increase = new_spiked_sum.saturating_sub(original_spiked_sum);
+
+                // New total if we imagine absolute abundances
+                let hypothetical_total = original_lib_sizes[i] + increase;
+
+                if hypothetical_total > 0 {
+                    // Scale everything to original library size
+                    let scale = original_lib_sizes[i] as f64 / hypothetical_total as f64;
+                    for row in spiked_values.iter_mut() {
+                        row[col] = ((row[col] as f64) * scale).round() as u64;
+                    }
+                }
+            }
+            1.0 // Library size preserved
+        }
+    };
+
+    // Build the count matrix
+    let mut tri_mat = TriMat::new((n_features, n_samples));
+    for row in 0..n_features {
+        for col in 0..n_samples {
+            let val = spiked_values[row][col];
             if val > 0 {
                 tri_mat.add_triplet(row, col, val);
             }
@@ -245,7 +378,50 @@ fn apply_abundance_spike(
         counts.sample_ids().to_vec(),
     )?;
 
-    Ok((new_counts, spiked_feature_ids))
+    // Calculate post-spike geometric means
+    let spiked_geo_means: Vec<f64> = target_samples
+        .iter()
+        .map(|&s| {
+            let mut log_sum = 0.0;
+            for row in 0..n_features {
+                let val = new_counts.get(row, s);
+                log_sum += (val as f64 + 1.0).ln();
+            }
+            (log_sum / n_features as f64).exp()
+        })
+        .collect();
+    let avg_spiked_geo_mean: f64 = spiked_geo_means.iter().sum::<f64>() / spiked_geo_means.len() as f64;
+
+    // Calculate effective CLR effect
+    // CLR effect ≈ log(fold_change) - log(geo_mean_ratio)
+    let geo_mean_ratio = avg_spiked_geo_mean / avg_orig_geo_mean;
+    let effective_clr_effect = fold_change.ln() - geo_mean_ratio.ln();
+
+    // Generate warning if compositional effects may dominate
+    let spike_fraction = feature_indices.len() as f64 / n_features as f64;
+    let compositional_warning = if spike_fraction > 0.1 {
+        Some(format!(
+            "Spiking {:.1}% of features may cause substantial compositional effects. \
+             Consider spiking fewer features for cleaner evaluation.",
+            spike_fraction * 100.0
+        ))
+    } else {
+        None
+    };
+
+    let diagnostics = SpikeDiagnostics {
+        original_geometric_mean: avg_orig_geo_mean,
+        spiked_geometric_mean: avg_spiked_geo_mean,
+        geometric_mean_ratio: geo_mean_ratio,
+        nominal_fold_change: fold_change,
+        effective_clr_effect,
+        library_size_factor,
+        n_spiked: feature_indices.len(),
+        n_total_features: n_features,
+        compositional_warning,
+    };
+
+    Ok((new_counts, spiked_feature_ids, diagnostics))
 }
 
 #[cfg(test)]
@@ -390,5 +566,166 @@ mod tests {
             &counts, &metadata, "group", 100, 2.0, "treatment",
             SpikeSelection::Random, 42
         ).is_err());
+    }
+
+    #[test]
+    fn test_spike_mode_raw() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let spiked = spike_abundance_with_mode(
+            &counts,
+            &metadata,
+            "group",
+            1,
+            2.0,
+            "treatment",
+            SpikeSelection::Specific(vec!["feat_0".into()]),
+            42,
+            SpikeMode::Raw,
+        ).unwrap();
+
+        // Raw mode: library size should increase for treatment samples
+        let orig_lib_size: u64 = counts.col_sums()[4..8].iter().sum();
+        let spiked_lib_size: u64 = spiked.counts.col_sums()[4..8].iter().sum();
+        assert!(spiked_lib_size > orig_lib_size, "Raw mode should increase library size");
+
+        // Diagnostics should be present
+        assert!(spiked.spec.diagnostics.is_some());
+        let diag = spiked.spec.diagnostics.as_ref().unwrap();
+        assert_eq!(diag.nominal_fold_change, 2.0);
+        assert!(diag.library_size_factor == 1.0);
+    }
+
+    #[test]
+    fn test_spike_mode_compositional() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let spiked = spike_abundance_with_mode(
+            &counts,
+            &metadata,
+            "group",
+            1,
+            2.0,
+            "treatment",
+            SpikeSelection::Specific(vec!["feat_0".into()]),
+            42,
+            SpikeMode::Compositional,
+        ).unwrap();
+
+        // Compositional mode: library size should be preserved (approximately)
+        for sample_idx in 4..8 {
+            let orig = counts.col_sums()[sample_idx];
+            let spiked_val = spiked.counts.col_sums()[sample_idx];
+            // Allow small rounding differences
+            let diff = (orig as f64 - spiked_val as f64).abs();
+            assert!(diff < 5.0, "Compositional mode should preserve library size, got diff={}", diff);
+        }
+
+        // Spiked feature should still have increased relative to others
+        let orig_feat0_treatment: u64 = (4..8).map(|s| counts.get(0, s)).sum();
+        let spiked_feat0_treatment: u64 = (4..8).map(|s| spiked.counts.get(0, s)).sum();
+        let orig_total_treatment: u64 = counts.col_sums()[4..8].iter().sum();
+        let spiked_total_treatment: u64 = spiked.counts.col_sums()[4..8].iter().sum();
+
+        let orig_proportion = orig_feat0_treatment as f64 / orig_total_treatment as f64;
+        let spiked_proportion = spiked_feat0_treatment as f64 / spiked_total_treatment as f64;
+        assert!(spiked_proportion > orig_proportion, "Spiked feature should have higher relative abundance");
+    }
+
+    #[test]
+    fn test_spike_mode_absolute() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let spiked = spike_abundance_with_mode(
+            &counts,
+            &metadata,
+            "group",
+            1,
+            2.0,
+            "treatment",
+            SpikeSelection::Specific(vec!["feat_0".into()]),
+            42,
+            SpikeMode::Absolute,
+        ).unwrap();
+
+        // Absolute mode: library size should be preserved
+        for sample_idx in 4..8 {
+            let orig = counts.col_sums()[sample_idx];
+            let spiked_val = spiked.counts.col_sums()[sample_idx];
+            let diff = (orig as f64 - spiked_val as f64).abs();
+            assert!(diff < 5.0, "Absolute mode should preserve library size");
+        }
+
+        // Non-spiked features should decrease (due to compositional closure)
+        let orig_feat1_treatment: u64 = (4..8).map(|s| counts.get(1, s)).sum();
+        let spiked_feat1_treatment: u64 = (4..8).map(|s| spiked.counts.get(1, s)).sum();
+        assert!(spiked_feat1_treatment < orig_feat1_treatment,
+            "Absolute mode: non-spiked features should decrease");
+    }
+
+    #[test]
+    fn test_spike_diagnostics() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // Use Raw mode so we can observe the geometric mean shift clearly
+        let spiked = spike_abundance_with_mode(
+            &counts,
+            &metadata,
+            "group",
+            2,  // Spike 2 features
+            3.0,
+            "treatment",
+            SpikeSelection::Random,
+            42,
+            SpikeMode::Raw,  // Raw mode to see geometric mean increase
+        ).unwrap();
+
+        let diag = spiked.spec.diagnostics.as_ref().unwrap();
+
+        // Check diagnostic fields are populated
+        assert!(diag.original_geometric_mean > 0.0);
+        assert!(diag.spiked_geometric_mean > 0.0);
+        assert!(diag.geometric_mean_ratio > 0.0);
+        assert_eq!(diag.nominal_fold_change, 3.0);
+        assert_eq!(diag.n_spiked, 2);
+        assert_eq!(diag.n_total_features, 5);
+
+        // In Raw mode with spiking, the geometric mean should increase
+        // (spiked values go up, increasing the average)
+        assert!(diag.geometric_mean_ratio >= 1.0,
+            "Geometric mean should increase or stay same when spiking in Raw mode, got ratio={}",
+            diag.geometric_mean_ratio);
+
+        // The effective CLR effect accounts for the geometric mean shift
+        // It should be positive (we're increasing features) but may differ from log(FC)
+        assert!(diag.effective_clr_effect.is_finite(),
+            "Effective CLR effect should be finite");
+    }
+
+    #[test]
+    fn test_spike_compositional_warning() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // Spike more than 10% of features (1 out of 5 = 20%)
+        let spiked = spike_abundance_with_mode(
+            &counts,
+            &metadata,
+            "group",
+            1,
+            2.0,
+            "treatment",
+            SpikeSelection::Random,
+            42,
+            SpikeMode::Raw,
+        ).unwrap();
+
+        let diag = spiked.spec.diagnostics.as_ref().unwrap();
+        assert!(diag.compositional_warning.is_some(),
+            "Should warn when spiking >10% of features");
     }
 }

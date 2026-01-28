@@ -79,8 +79,9 @@ pub mod prelude {
     pub use crate::test::wald::{test_wald, WaldResult};
     pub use crate::zero::pseudocount::add_pseudocount;
     pub use crate::spike::{
-        AbundanceLevel, SpikeEvaluation, SpikeSelection, SpikeSpec, SpikeType, SpikedData,
-        TierMetrics, ValidationConfig, ValidationResult, ValidationSummary,
-        evaluate_spikes, run_spike_validation, shuffle_labels, spike_abundance, spike_presence,
+        AbundanceLevel, SpikeDiagnostics, SpikeEvaluation, SpikeMode, SpikeSelection,
+        SpikeSpec, SpikeType, SpikedData, TierMetrics, ValidationConfig, ValidationResult,
+        ValidationSummary, evaluate_spikes, run_spike_validation, shuffle_labels,
+        spike_abundance, spike_abundance_with_mode, spike_presence,
     };
 }

@@ -10,9 +10,9 @@ mod evaluate;
 mod validate;
 
 pub use types::{
-    AbundanceLevel, SpikeSelection, SpikeSpec, SpikedData, SpikeType,
+    AbundanceLevel, SpikeDiagnostics, SpikeMode, SpikeSelection, SpikeSpec, SpikedData, SpikeType,
 };
-pub use abundance::spike_abundance;
+pub use abundance::{spike_abundance, spike_abundance_with_mode};
 pub use presence::{spike_presence, spike_hurdle};
 pub use evaluate::{evaluate_spikes, SpikeEvaluation, TierMetrics};
 pub use validate::{
