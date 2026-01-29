@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use composable_daa::data::{CountMatrix, Metadata};
 use composable_daa::error::Result;
 use composable_daa::pipeline::{Pipeline, PipelineConfig};
-use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity};
+use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity, profile_for_llm};
 use composable_daa::spike::{
     evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection,
     StressConfig, run_stress_test,
@@ -281,6 +281,29 @@ enum Commands {
         #[arg(long)]
         quick: bool,
     },
+
+    /// Generate LLM-friendly data profile for AI-assisted pipeline selection
+    ProfileLlm {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Group column name
+        #[arg(short, long)]
+        group: String,
+
+        /// Output file (default: stdout for piping)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format: yaml (default) or markdown
+        #[arg(long, default_value = "yaml")]
+        format: String,
+    },
 }
 
 fn main() {
@@ -396,6 +419,14 @@ fn main() {
             &output_format,
             quick,
         ),
+
+        Commands::ProfileLlm {
+            counts,
+            metadata,
+            group,
+            output,
+            format,
+        } => cmd_profile_llm(&counts, &metadata, &group, output.as_ref(), &format),
     };
 
     if let Err(e) = result {
@@ -977,6 +1008,47 @@ fn cmd_optimize_prevalence(
         _ => {
             // Text format (default)
             println!("{}", result);
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate LLM-friendly data profile
+fn cmd_profile_llm(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    group: &str,
+    output_path: Option<&PathBuf>,
+    format: &str,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    eprintln!("Generating LLM-friendly profile...");
+    let profile = profile_for_llm(&counts, &metadata, group)?;
+
+    // Generate output in requested format
+    let output = match format {
+        "markdown" | "md" => profile.to_markdown(),
+        _ => profile.to_yaml()?,
+    };
+
+    // Write to file or stdout
+    match output_path {
+        Some(path) => {
+            std::fs::write(path, &output)?;
+            eprintln!("Profile written to {:?}", path);
+        }
+        None => {
+            println!("{}", output);
         }
     }
 
