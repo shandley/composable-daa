@@ -4,6 +4,18 @@
 
 A Rust library providing composable statistical primitives for differential abundance analysis of sparse count data (microbiome/virome). The core insight is that all existing DAA methods (DESeq2, LinDA, ANCOM-BC, ALDEx2, corncob, etc.) are simply different compositions of fundamental statistical operations. This library exposes those primitives directly, allowing data-driven pipeline construction and empirical validation via spike-in analysis.
 
+## Core Goals
+
+The library addresses four key problems in DAA:
+
+1. **Method selection is arbitrary** - Researchers pick methods without knowing which works best for their data. We solve this with **empirical spike-in validation** that tests methods on the user's actual data structure.
+
+2. **Prevalence filtering is a shot in the dark** - Thresholds like 0.1 or 0.05 are chosen arbitrarily. We solve this with **prevalence threshold optimization** via spike-in, finding the threshold that maximizes sensitivity while controlling FDR.
+
+3. **Group-specific prevalence is ignored** - Healthy vs. disease groups may have different sparsity patterns. We support **group-aware prevalence filtering** with different thresholds per group.
+
+4. **Pipeline selection requires expertise** - Choosing the right combination of primitives is complex. We enable **AI-assisted pipeline design** through structured data profiling that LLMs can interpret and use to recommend configurations.
+
 ## Design Philosophy
 
 1. **Primitives over methods**: Expose fundamental operations, not opinionated workflows
@@ -11,6 +23,42 @@ A Rust library providing composable statistical primitives for differential abun
 3. **Composable**: Primitives have consistent interfaces and can be chained arbitrarily
 4. **Validatable**: Built-in spike-in framework to empirically evaluate pipeline performance on user's actual data structure
 5. **Prevalence-aware**: Groupwise prevalence analysis as a first-class concept, not an afterthought
+6. **Empirical over theoretical**: Validate on user's data, don't trust assumptions
+
+---
+
+## Implementation Status
+
+### Fully Implemented (194 tests passing)
+
+| Category | Components |
+|----------|------------|
+| **Data Structures** | CountMatrix, Metadata, Formula, DesignMatrix, DAResult, TransformedMatrix |
+| **Profiling** | sparsity, prevalence (by group), library_size |
+| **Filtering** | prevalence (overall, groupwise, differential), abundance, library_size, stratified |
+| **Zero Handling** | pseudocount (fixed, adaptive) |
+| **Normalization** | CLR, TSS |
+| **Models** | LM, NB-GLM, ZINB, model comparison (AIC/BIC), effect size shrinkage |
+| **Testing** | Wald (LM, NB, ZINB), LRT (NB, ZINB) |
+| **Correction** | Benjamini-Hochberg |
+| **Spike-in** | abundance spikes (3 modes), presence spikes, evaluation, validation, stress testing |
+| **Pipeline** | composition, YAML serialization, stratified presets, CLI |
+
+### Next Priorities
+
+1. **Prevalence threshold optimization** - Sweep thresholds, use spike-in to find optimal
+2. **LLM-friendly profiling** - Structured reports for AI-assisted pipeline design
+3. **Group-specific threshold optimization** - Different optimal thresholds per group
+
+### Future Work
+
+- TMM normalization
+- Linear mixed models (longitudinal data)
+- Permutation tests
+- Beta-binomial models
+- Hurdle models
+
+---
 
 ## Core Data Structures
 
@@ -1080,14 +1128,34 @@ fn main() -> Result<(), Error> {
 
 ## Future Extensions
 
-1. **Phylogenetic-aware methods**: Incorporate tree structure into testing (e.g., PGLMM)
+### Near-term (Next Priorities)
 
-2. **Multi-omics integration**: Joint modeling with metabolomics, host transcriptomics
+1. **Prevalence threshold optimization**: Use spike-in validation to empirically determine optimal prevalence thresholds. Sweep across threshold values, measure sensitivity/FDR at each, identify the threshold that maximizes detection while controlling false discoveries.
 
-3. **Time series**: Specialized primitives for longitudinal analysis
+2. **Group-specific prevalence optimization**: Allow different prevalence thresholds for different groups (e.g., healthy samples may be sparser than disease). Optimize thresholds per group or use adaptive thresholds based on group sparsity.
 
-4. **Network effects**: Test for differential co-occurrence, not just abundance
+3. **LLM-friendly data profiling**: Generate structured summaries (markdown/JSON) that capture data characteristics and their implications for method selection. Enable AI-assisted pipeline recommendation based on data structure.
 
-5. **Batch effects**: ComBat-style batch correction as a primitive
+### Medium-term (Model Extensions)
 
-6. **Effect size shrinkage**: ASH, apeglm-style shrinkage estimators
+4. **Linear mixed models (LMM)**: Support longitudinal and repeated-measures designs with random effects for subjects.
+
+5. **Permutation tests**: Distribution-free alternative to parametric tests, useful when model assumptions are uncertain.
+
+6. **Beta-binomial models**: corncob-style modeling of both abundance and dispersion as functions of covariates.
+
+7. **Hurdle models**: Explicit two-part models separating presence/absence from abundance among present features.
+
+### Long-term (Advanced Features)
+
+8. **Phylogenetic-aware methods**: Incorporate tree structure into testing (e.g., PGLMM)
+
+9. **Multi-omics integration**: Joint modeling with metabolomics, host transcriptomics
+
+10. **Network effects**: Test for differential co-occurrence, not just abundance
+
+11. **Batch effects**: ComBat-style batch correction as a primitive
+
+### Completed (Originally Future)
+
+- ~~Effect size shrinkage~~: Implemented with empirical Bayes estimation (Normal/Adaptive methods)

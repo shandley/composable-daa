@@ -9,6 +9,7 @@ mod presence;
 mod evaluate;
 mod validate;
 pub mod stress;
+pub mod prevalence_opt;
 
 pub use types::{
     AbundanceLevel, SpikeDiagnostics, SpikeMode, SpikeSelection, SpikeSpec, SpikedData, SpikeType,
@@ -25,4 +26,9 @@ pub use stress::{
     AggregatedMetrics, PowerPoint, ModeComparisonSummary, ModeStats,
     run_stress_test, generate_parameter_grid, aggregate_results,
     calculate_power_curves, compare_modes,
+};
+pub use prevalence_opt::{
+    optimize_prevalence_threshold, PrevalenceOptConfig, PrevalenceOptResult,
+    PrevalenceFilterLogic, OptimizationCriterion, ThresholdResult, ThresholdReplicate,
+    PerGroupOptConfig, PerGroupOptResult,
 };

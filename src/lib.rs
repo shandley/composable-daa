@@ -101,5 +101,8 @@ pub mod prelude {
         AggregatedMetrics, PowerPoint, ModeComparisonSummary, ModeStats,
         run_stress_test, generate_parameter_grid, aggregate_results,
         calculate_power_curves, compare_modes,
+        // Prevalence optimization
+        optimize_prevalence_threshold, PrevalenceOptConfig, PrevalenceOptResult,
+        PrevalenceFilterLogic, OptimizationCriterion, ThresholdResult,
     };
 }

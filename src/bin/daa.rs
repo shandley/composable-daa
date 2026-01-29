@@ -10,6 +10,7 @@ use composable_daa::profile::{profile_library_size, profile_prevalence, profile_
 use composable_daa::spike::{
     evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection,
     StressConfig, run_stress_test,
+    optimize_prevalence_threshold, PrevalenceOptConfig, PrevalenceFilterLogic, OptimizationCriterion,
 };
 use std::path::PathBuf;
 
@@ -217,6 +218,69 @@ enum Commands {
         #[arg(long)]
         quick: bool,
     },
+
+    /// Find optimal prevalence threshold via spike-in validation
+    OptimizePrevalence {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Group column name
+        #[arg(short, long)]
+        group: String,
+
+        /// Target group for spiking
+        #[arg(short = 't', long)]
+        target: String,
+
+        /// Formula for the model
+        #[arg(short, long)]
+        formula: String,
+
+        /// Coefficient to test
+        #[arg(long)]
+        test_coef: String,
+
+        /// Thresholds to evaluate (comma-separated, e.g., "0.01,0.05,0.10,0.20,0.30")
+        #[arg(long, default_value = "0.01,0.02,0.05,0.10,0.15,0.20,0.25,0.30")]
+        thresholds: String,
+
+        /// Fold change for spike-ins
+        #[arg(long, default_value = "2.0")]
+        fold_change: f64,
+
+        /// Number of features to spike per replicate
+        #[arg(long, default_value = "20")]
+        n_spike: usize,
+
+        /// Number of replicates per threshold
+        #[arg(long, default_value = "5")]
+        replicates: usize,
+
+        /// Optimization criterion: max-f1, max-sensitivity, max-efficiency, min-fdr
+        #[arg(long, default_value = "max-f1")]
+        criterion: String,
+
+        /// Filter logic: overall, any-group, all-groups
+        #[arg(long, default_value = "overall")]
+        filter_logic: String,
+
+        /// Random seed
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Output format: text, json, or csv
+        #[arg(long, default_value = "text")]
+        output_format: String,
+
+        /// Quick mode: use fewer thresholds and replicates
+        #[arg(long)]
+        quick: bool,
+    },
 }
 
 fn main() {
@@ -294,6 +358,40 @@ fn main() {
             &modes,
             replicates,
             permutations,
+            seed,
+            &output_format,
+            quick,
+        ),
+
+        Commands::OptimizePrevalence {
+            counts,
+            metadata,
+            group,
+            target,
+            formula,
+            test_coef,
+            thresholds,
+            fold_change,
+            n_spike,
+            replicates,
+            criterion,
+            filter_logic,
+            seed,
+            output_format,
+            quick,
+        } => cmd_optimize_prevalence(
+            &counts,
+            &metadata,
+            &group,
+            &target,
+            &formula,
+            &test_coef,
+            &thresholds,
+            fold_change,
+            n_spike,
+            replicates,
+            &criterion,
+            &filter_logic,
             seed,
             &output_format,
             quick,
@@ -763,6 +861,122 @@ fn cmd_stress(
         _ => {
             // Text format (default)
             println!("{}", summary);
+        }
+    }
+
+    Ok(())
+}
+
+/// Optimize prevalence threshold via spike-in validation
+#[allow(clippy::too_many_arguments)]
+fn cmd_optimize_prevalence(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    group: &str,
+    target: &str,
+    formula: &str,
+    test_coef: &str,
+    thresholds_str: &str,
+    fold_change: f64,
+    n_spike: usize,
+    replicates: usize,
+    criterion_str: &str,
+    filter_logic_str: &str,
+    seed: u64,
+    output_format: &str,
+    quick: bool,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    // Parse thresholds
+    let thresholds: Vec<f64> = thresholds_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    // Parse criterion
+    let criterion = match criterion_str.to_lowercase().as_str() {
+        "max-f1" => OptimizationCriterion::MaxF1,
+        "max-sensitivity" => OptimizationCriterion::MaxSensitivityAtFdr(0.10),
+        "max-efficiency" => OptimizationCriterion::MaxEfficiency,
+        "min-fdr" => OptimizationCriterion::MinFdrAtSensitivity(0.70),
+        _ => OptimizationCriterion::MaxF1,
+    };
+
+    // Parse filter logic
+    let filter_logic = match filter_logic_str.to_lowercase().as_str() {
+        "any-group" => PrevalenceFilterLogic::AnyGroup,
+        "all-groups" => PrevalenceFilterLogic::AllGroups,
+        _ => PrevalenceFilterLogic::Overall,
+    };
+
+    // Build config
+    let config = if quick {
+        PrevalenceOptConfig::quick()
+    } else {
+        PrevalenceOptConfig {
+            thresholds,
+            fold_change,
+            n_spike,
+            n_replicates: replicates,
+            group_column: group.to_string(),
+            target_group: target.to_string(),
+            fdr_threshold: 0.05,
+            selection_criterion: criterion,
+            filter_logic,
+            spike_mode: SpikeMode::Compositional,
+            seed,
+        }
+    };
+
+    let total_runs = config.thresholds.len() * config.n_replicates;
+
+    eprintln!("Optimizing prevalence threshold...");
+    eprintln!("  Thresholds: {:?}", config.thresholds);
+    eprintln!("  Fold change: {}x", config.fold_change);
+    eprintln!("  Features per spike: {}", config.n_spike);
+    eprintln!("  Replicates: {}", config.n_replicates);
+    eprintln!("  Total evaluations: {}", total_runs);
+    eprintln!();
+
+    // Create the pipeline closure
+    let formula_owned = formula.to_string();
+    let test_coef_owned = test_coef.to_string();
+
+    let run_pipeline = move |c: &CountMatrix, m: &Metadata| {
+        Pipeline::new()
+            .name("optimize_prevalence")
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm(&formula_owned)
+            .test_wald(&test_coef_owned)
+            .correct_bh()
+            .run(c, m)
+    };
+
+    let result = optimize_prevalence_threshold(&counts, &metadata, &config, run_pipeline)?;
+
+    // Output results
+    match output_format {
+        "json" => {
+            let json = serde_json::to_string_pretty(&result)?;
+            println!("{}", json);
+        }
+        "csv" => {
+            let csv = result.to_csv();
+            print!("{}", csv);
+        }
+        _ => {
+            // Text format (default)
+            println!("{}", result);
         }
     }
 
