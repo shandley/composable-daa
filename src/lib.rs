@@ -70,6 +70,7 @@ pub mod prelude {
         filter_stratified, TierConfig, TierThresholds, StratifiedFilterResult,
     };
     pub use crate::model::lm::{model_lm, LmFit};
+    pub use crate::model::nb::{model_nb, NbFit};
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
     pub use crate::normalize::tss::{norm_tss, norm_tss_with_pseudocount, TssMatrix, scale as tss_scale};
     pub use crate::pipeline::{Pipeline, PipelineStep, StratifiedPreset};
@@ -77,7 +78,7 @@ pub mod prelude {
         LibrarySizeProfile, PrevalenceProfile, SparsityProfile,
         profile_library_size, profile_prevalence, profile_sparsity,
     };
-    pub use crate::test::wald::{test_wald, WaldResult};
+    pub use crate::test::wald::{test_wald, test_wald_nb, WaldResult};
     pub use crate::zero::pseudocount::add_pseudocount;
     pub use crate::spike::{
         AbundanceLevel, SpikeDiagnostics, SpikeEvaluation, SpikeMode, SpikeSelection,

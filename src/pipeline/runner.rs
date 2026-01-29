@@ -9,10 +9,10 @@ use crate::filter::{
     filter_prevalence_overall, filter_stratified, filter_total_count, GroupwiseLogic,
     TierThresholds,
 };
-use crate::model::model_lm;
+use crate::model::{model_lm, model_nb};
 use crate::normalize::{norm_clr, norm_tss, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
-use crate::test::test_wald;
+use crate::test::{test_wald, test_wald_nb};
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,8 @@ pub enum PipelineStep {
     // === Model Fitting ===
     /// Fit linear model.
     ModelLM { formula: String },
+    /// Fit negative binomial GLM.
+    ModelNB { formula: String },
 
     // === Testing ===
     /// Wald test for a coefficient.
@@ -284,6 +286,17 @@ impl Pipeline {
         self
     }
 
+    /// Add negative binomial GLM.
+    ///
+    /// Fits a negative binomial model directly to count data.
+    /// Does not require normalization (works on raw counts).
+    pub fn model_nb(mut self, formula: &str) -> Self {
+        self.steps.push(PipelineStep::ModelNB {
+            formula: formula.to_string(),
+        });
+        self
+    }
+
     /// Add Wald test.
     pub fn test_wald(mut self, coefficient: &str) -> Self {
         self.steps.push(PipelineStep::TestWald {
@@ -329,6 +342,7 @@ struct PipelineState {
     transformed: Option<TransformedMatrix>,
     design: Option<DesignMatrix>,
     lm_fit: Option<crate::model::LmFit>,
+    nb_fit: Option<crate::model::NbFit>,
     wald_result: Option<crate::test::WaldResult>,
     bh_corrected: Option<crate::correct::bh::BhCorrected>,
     prevalence: Option<PrevalenceProfile>,
@@ -343,6 +357,7 @@ impl PipelineState {
             transformed: None,
             design: None,
             lm_fit: None,
+            nb_fit: None,
             wald_result: None,
             bh_corrected: None,
             prevalence: None,
@@ -458,12 +473,28 @@ impl PipelineState {
                 self.lm_fit = Some(model_lm(transformed, design)?);
             }
 
+            PipelineStep::ModelNB { formula } => {
+                let parsed_formula = Formula::parse(formula)?;
+                self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                let design = self.design.as_ref().unwrap();
+                // NB model works directly on counts (no normalization needed)
+                self.nb_fit = Some(model_nb(&self.counts, design)?);
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             // === Testing ===
             PipelineStep::TestWald { coefficient } => {
-                let fit = self.lm_fit.as_ref().ok_or_else(|| {
-                    DaaError::Pipeline("Must fit model before Wald test".to_string())
-                })?;
-                self.wald_result = Some(test_wald(fit, coefficient)?);
+                // Check for LM fit first, then NB fit
+                if let Some(fit) = self.lm_fit.as_ref() {
+                    self.wald_result = Some(test_wald(fit, coefficient)?);
+                } else if let Some(fit) = self.nb_fit.as_ref() {
+                    self.wald_result = Some(test_wald_nb(fit, coefficient)?);
+                } else {
+                    return Err(DaaError::Pipeline(
+                        "Must fit model before Wald test".to_string(),
+                    ));
+                }
             }
 
             // === Correction ===

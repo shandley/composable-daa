@@ -1,9 +1,9 @@
 //! Wald test for coefficient significance.
 
 use crate::error::{DaaError, Result};
-use crate::model::LmFit;
+use crate::model::{LmFit, NbFit};
 use serde::{Deserialize, Serialize};
-use statrs::distribution::{ContinuousCDF, StudentsT};
+use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 
 /// Result of Wald test for a single feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +137,68 @@ pub fn test_wald_multiple(fit: &LmFit, coefficients: &[&str]) -> Result<Vec<Wald
         .iter()
         .map(|c| test_wald(fit, c))
         .collect()
+}
+
+/// Perform Wald test on negative binomial GLM coefficients.
+///
+/// Tests H0: β = 0 vs H1: β ≠ 0 using the normal distribution (z-test).
+/// For GLMs, the Wald statistic z = β / SE(β) is compared to a standard
+/// normal distribution for large samples.
+///
+/// # Arguments
+/// * `fit` - Negative binomial model fit results
+/// * `coefficient` - Name of coefficient to test
+///
+/// # Returns
+/// WaldResult containing test statistics and p-values for all features.
+pub fn test_wald_nb(fit: &NbFit, coefficient: &str) -> Result<WaldResult> {
+    let coef_idx = fit.coefficient_index(coefficient).ok_or_else(|| {
+        DaaError::InvalidParameter(format!(
+            "Coefficient '{}' not found. Available: {:?}",
+            coefficient, fit.coefficient_names
+        ))
+    })?;
+
+    let normal = Normal::new(0.0, 1.0).unwrap();
+
+    let results: Vec<WaldResultSingle> = fit
+        .fits
+        .iter()
+        .map(|f| {
+            let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let df = f.df_residual;
+
+            // Calculate z-statistic
+            let statistic = if std_error > 0.0 && !std_error.is_nan() {
+                estimate / std_error
+            } else {
+                f64::NAN
+            };
+
+            // Calculate two-sided p-value using normal distribution
+            let p_value = if !statistic.is_nan() {
+                2.0 * (1.0 - normal.cdf(statistic.abs()))
+            } else {
+                f64::NAN
+            };
+
+            WaldResultSingle {
+                feature_id: f.feature_id.clone(),
+                coefficient: coefficient.to_string(),
+                estimate,
+                std_error,
+                statistic,
+                p_value,
+                df,
+            }
+        })
+        .collect();
+
+    Ok(WaldResult {
+        results,
+        coefficient: coefficient.to_string(),
+    })
 }
 
 #[cfg(test)]
