@@ -415,7 +415,7 @@ fn nb_deviance(y: &DVector<f64>, mu: &DVector<f64>, theta: f64) -> f64 {
 }
 
 /// Log gamma function (approximation using Stirling's formula for large values).
-fn lgamma(x: f64) -> f64 {
+pub fn lgamma(x: f64) -> f64 {
     if x <= 0.0 {
         return f64::INFINITY;
     }

@@ -9,10 +9,10 @@ use crate::filter::{
     filter_prevalence_overall, filter_stratified, filter_total_count, GroupwiseLogic,
     TierThresholds,
 };
-use crate::model::{model_lm, model_nb};
+use crate::model::{model_lm, model_nb, model_zinb};
 use crate::normalize::{norm_clr, norm_tss, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
-use crate::test::{test_wald, test_wald_nb};
+use crate::test::{test_wald, test_wald_nb, test_wald_zinb};
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,8 @@ pub enum PipelineStep {
     ModelLM { formula: String },
     /// Fit negative binomial GLM.
     ModelNB { formula: String },
+    /// Fit zero-inflated negative binomial GLM.
+    ModelZINB { formula: String },
 
     // === Testing ===
     /// Wald test for a coefficient.
@@ -297,6 +299,20 @@ impl Pipeline {
         self
     }
 
+    /// Add zero-inflated negative binomial GLM.
+    ///
+    /// Fits a ZINB model that handles excess zeros by modeling them as a mixture:
+    /// - Structural zeros (true absence)
+    /// - Sampling zeros (from negative binomial)
+    ///
+    /// Does not require normalization (works on raw counts).
+    pub fn model_zinb(mut self, formula: &str) -> Self {
+        self.steps.push(PipelineStep::ModelZINB {
+            formula: formula.to_string(),
+        });
+        self
+    }
+
     /// Add Wald test.
     pub fn test_wald(mut self, coefficient: &str) -> Self {
         self.steps.push(PipelineStep::TestWald {
@@ -343,6 +359,7 @@ struct PipelineState {
     design: Option<DesignMatrix>,
     lm_fit: Option<crate::model::LmFit>,
     nb_fit: Option<crate::model::NbFit>,
+    zinb_fit: Option<crate::model::ZinbFit>,
     wald_result: Option<crate::test::WaldResult>,
     bh_corrected: Option<crate::correct::bh::BhCorrected>,
     prevalence: Option<PrevalenceProfile>,
@@ -358,6 +375,7 @@ impl PipelineState {
             design: None,
             lm_fit: None,
             nb_fit: None,
+            zinb_fit: None,
             wald_result: None,
             bh_corrected: None,
             prevalence: None,
@@ -483,13 +501,25 @@ impl PipelineState {
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
 
+            PipelineStep::ModelZINB { formula } => {
+                let parsed_formula = Formula::parse(formula)?;
+                self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                let design = self.design.as_ref().unwrap();
+                // ZINB model works directly on counts (no normalization needed)
+                self.zinb_fit = Some(model_zinb(&self.counts, design)?);
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             // === Testing ===
             PipelineStep::TestWald { coefficient } => {
-                // Check for LM fit first, then NB fit
+                // Check for LM fit first, then NB fit, then ZINB fit
                 if let Some(fit) = self.lm_fit.as_ref() {
                     self.wald_result = Some(test_wald(fit, coefficient)?);
                 } else if let Some(fit) = self.nb_fit.as_ref() {
                     self.wald_result = Some(test_wald_nb(fit, coefficient)?);
+                } else if let Some(fit) = self.zinb_fit.as_ref() {
+                    self.wald_result = Some(test_wald_zinb(fit, coefficient)?);
                 } else {
                     return Err(DaaError::Pipeline(
                         "Must fit model before Wald test".to_string(),
@@ -519,16 +549,32 @@ impl PipelineState {
             DaaError::Pipeline("Prevalence not computed".to_string())
         })?;
 
-        // Calculate mean abundances from transformed data
-        let transformed = self.transformed.ok_or_else(|| {
-            DaaError::Pipeline("Transformed data not available".to_string())
-        })?;
-        let mean_abundances: Vec<f64> = (0..transformed.n_features())
-            .map(|i| {
-                let row = transformed.row(i);
-                row.iter().sum::<f64>() / row.len() as f64
-            })
-            .collect();
+        // Calculate mean abundances from transformed data if available,
+        // otherwise from raw counts (for NB/ZINB models)
+        let mean_abundances: Vec<f64> = if let Some(ref transformed) = self.transformed {
+            (0..transformed.n_features())
+                .map(|i| {
+                    let row = transformed.row(i);
+                    row.iter().sum::<f64>() / row.len() as f64
+                })
+                .collect()
+        } else {
+            // Compute mean relative abundances from counts
+            let n_samples = self.counts.n_samples();
+            let col_sums = self.counts.col_sums();
+            (0..self.counts.n_features())
+                .map(|i| {
+                    let row = self.counts.row_dense(i);
+                    let rel_abund: f64 = row.iter()
+                        .zip(col_sums.iter())
+                        .map(|(&count, &total)| {
+                            if total > 0 { count as f64 / total as f64 } else { 0.0 }
+                        })
+                        .sum();
+                    rel_abund / n_samples as f64
+                })
+                .collect()
+        };
 
         Ok(create_results(
             &wald,
