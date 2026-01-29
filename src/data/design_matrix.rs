@@ -19,6 +19,22 @@ pub struct DesignMatrix {
 }
 
 impl DesignMatrix {
+    /// Create a design matrix directly from components.
+    ///
+    /// This is useful for creating reduced models for LRT or other custom designs.
+    pub fn from_matrix(
+        matrix: DMatrix<f64>,
+        coefficient_names: Vec<String>,
+        sample_ids: Vec<String>,
+    ) -> Self {
+        Self {
+            matrix,
+            coefficient_names,
+            sample_ids,
+            reference_levels: HashMap::new(),
+        }
+    }
+
     /// Build a design matrix from metadata and formula.
     pub fn from_formula(metadata: &Metadata, formula: &Formula) -> Result<Self> {
         let sample_ids = metadata.sample_ids().to_vec();

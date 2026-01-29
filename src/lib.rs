@@ -79,6 +79,7 @@ pub mod prelude {
         LibrarySizeProfile, PrevalenceProfile, SparsityProfile,
         profile_library_size, profile_prevalence, profile_sparsity,
     };
+    pub use crate::test::lrt::{test_lrt_nb, test_lrt_zinb, test_lrt_nb_fitted, test_lrt_zinb_fitted, LrtResult};
     pub use crate::test::wald::{test_wald, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult};
     pub use crate::zero::pseudocount::add_pseudocount;
     pub use crate::spike::{
