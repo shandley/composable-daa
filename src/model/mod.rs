@@ -3,6 +3,7 @@
 pub mod compare;
 pub mod lm;
 pub mod nb;
+pub mod shrink;
 pub mod zinb;
 
 pub use compare::{
@@ -12,4 +13,8 @@ pub use compare::{
 };
 pub use lm::{model_lm, LmFit, LmFitSingle};
 pub use nb::{model_nb, NbFit, NbFitSingle};
+pub use shrink::{
+    shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
+    ShrinkageResult, ShrunkEstimate,
+};
 pub use zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit, ZinbFitSingle};

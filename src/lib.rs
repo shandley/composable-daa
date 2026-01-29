@@ -76,6 +76,10 @@ pub mod prelude {
     };
     pub use crate::model::lm::{model_lm, LmFit};
     pub use crate::model::nb::{model_nb, NbFit};
+    pub use crate::model::shrink::{
+        shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
+        ShrinkageResult, ShrunkEstimate,
+    };
     pub use crate::model::zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit};
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
     pub use crate::normalize::tss::{norm_tss, norm_tss_with_pseudocount, TssMatrix, scale as tss_scale};
