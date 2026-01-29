@@ -69,6 +69,11 @@ pub mod prelude {
         // Stratified filtering
         filter_stratified, TierConfig, TierThresholds, StratifiedFilterResult,
     };
+    pub use crate::model::compare::{
+        compare_nb_zinb, criteria_nb, criteria_zinb, select_best_model,
+        ComparisonSummary, EvidenceStrength, FeatureComparison, ModelComparisonResult,
+        ModelCriteria, SelectionCriterion,
+    };
     pub use crate::model::lm::{model_lm, LmFit};
     pub use crate::model::nb::{model_nb, NbFit};
     pub use crate::model::zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit};
