@@ -148,7 +148,7 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (353 tests passing)
+## Current Status (354 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
@@ -185,7 +185,6 @@ Pipeline::new()
   - Supports Poisson or NB for count component
 
 ### Future Work
-- CLI integration for BB and hurdle models
 - LRT for hurdle models
 - Shrinkage for BB/hurdle effect sizes
 
@@ -208,6 +207,12 @@ daa profile-llm -c counts.tsv -m metadata.tsv -g group
 
 # Run LinDA-style analysis
 daa linda -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+
+# Run beta-binomial analysis (proportions with overdispersion)
+daa bb -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+
+# Run hurdle model analysis (sparse data with structural zeros)
+daa hurdle -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
 
 # Run with permutation tests (non-parametric)
 daa permutation -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv

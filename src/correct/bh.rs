@@ -65,24 +65,29 @@ pub fn correct_bh(p_values: &[f64], feature_ids: &[String]) -> BhCorrected {
     }
 
     // Create sorted index
+    // Use total_cmp for proper handling of NaN values (NaN sorts to end)
     let mut indices: Vec<usize> = (0..n).collect();
-    indices.sort_by(|&a, &b| {
-        p_values[a]
-            .partial_cmp(&p_values[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|&a, &b| p_values[a].total_cmp(&p_values[b]));
 
     // Calculate adjusted p-values
     let mut q_sorted = vec![0.0; n];
     let n_f64 = n as f64;
 
-    // Start from largest p-value
-    q_sorted[n - 1] = p_values[indices[n - 1]].min(1.0);
+    // Start from largest p-value (NaN values are at end due to total_cmp)
+    // Handle NaN by treating it as 1.0 for q-value calculation
+    let last_p = p_values[indices[n - 1]];
+    q_sorted[n - 1] = if last_p.is_nan() { 1.0 } else { last_p.min(1.0) };
 
     // Work backwards
     for i in (0..n - 1).rev() {
         let rank = i + 1;
-        let adjusted = p_values[indices[i]] * n_f64 / rank as f64;
+        let p = p_values[indices[i]];
+        // Handle NaN p-values by treating them as 1.0
+        let adjusted = if p.is_nan() {
+            1.0
+        } else {
+            p * n_f64 / rank as f64
+        };
         q_sorted[i] = adjusted.min(q_sorted[i + 1]).min(1.0);
     }
 
@@ -287,6 +292,27 @@ mod tests {
 
         assert!(n_sig_01 <= n_sig_05);
         assert!(n_sig_05 <= n_sig_10);
+    }
+
+    #[test]
+    fn test_bh_with_nan() {
+        // Test handling of NaN p-values
+        let p_values = vec![0.01, f64::NAN, 0.03, 0.005, f64::NAN];
+        let feature_ids: Vec<String> = (0..5).map(|i| format!("feat_{}", i)).collect();
+
+        let corrected = correct_bh(&p_values, &feature_ids);
+
+        // Should not panic
+        assert_eq!(corrected.n_tests, 5);
+
+        // NaN p-values should result in q-value of 1.0
+        assert_eq!(corrected.q_values[1], 1.0);
+        assert_eq!(corrected.q_values[4], 1.0);
+
+        // Non-NaN values should be properly corrected
+        assert!(corrected.q_values[0] < 1.0);
+        assert!(corrected.q_values[2] < 1.0);
+        assert!(corrected.q_values[3] < 1.0);
     }
 
     #[test]
