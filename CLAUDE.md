@@ -130,7 +130,7 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (306 tests passing)
+## Current Status (327 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
@@ -147,6 +147,8 @@ Pipeline::new()
   - BLUPs for random effects
   - Random slopes: `(1 + time | subject)`, `(0 + time | subject)`
   - Correlation estimation between random intercept and slope
+  - Satterthwaite df approximation (coefficient-specific df accounting for variance uncertainty)
+  - Kenward-Roger df approximation (bias-corrected covariance + df for small samples)
 - Testing (Wald, LRT, permutation) - including test_wald_lmm for mixed models
 - Correction (Benjamini-Hochberg)
 - Spike-in validation (abundance, presence, stress testing, threshold optimization)
@@ -155,7 +157,6 @@ Pipeline::new()
 - CLI tool with full feature coverage
 
 ### Future Work
-- Satterthwaite/Kenward-Roger df approximation for LMM
 - Beta-binomial models
 - Hurdle models
 
