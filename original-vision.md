@@ -29,34 +29,36 @@ The library addresses four key problems in DAA:
 
 ## Implementation Status
 
-### Fully Implemented (194 tests passing)
+### Fully Implemented (254 tests passing)
 
 | Category | Components |
 |----------|------------|
 | **Data Structures** | CountMatrix, Metadata, Formula, DesignMatrix, DAResult, TransformedMatrix |
-| **Profiling** | sparsity, prevalence (by group), library_size |
+| **Profiling** | sparsity, prevalence (by group), library_size, LLM-friendly output |
 | **Filtering** | prevalence (overall, groupwise, differential), abundance, library_size, stratified |
 | **Zero Handling** | pseudocount (fixed, adaptive) |
-| **Normalization** | CLR, TSS |
+| **Normalization** | CLR, TSS, TMM, spike-in normalization |
 | **Models** | LM, NB-GLM, ZINB, model comparison (AIC/BIC), effect size shrinkage |
-| **Testing** | Wald (LM, NB, ZINB), LRT (NB, ZINB) |
+| **Testing** | Wald (LM, NB, ZINB), LRT (NB, ZINB), permutation tests |
 | **Correction** | Benjamini-Hochberg |
-| **Spike-in** | abundance spikes (3 modes), presence spikes, evaluation, validation, stress testing |
+| **Spike-in** | abundance spikes (3 modes), presence spikes, evaluation, validation, stress testing, threshold optimization |
+| **Benchmarking** | synthetic data generation, classic dataset fetcher (Zenodo) |
 | **Pipeline** | composition, YAML serialization, stratified presets, CLI |
 
-### Next Priorities
+### Completed (Originally Next Priorities)
 
-1. **Prevalence threshold optimization** - Sweep thresholds, use spike-in to find optimal
-2. **LLM-friendly profiling** - Structured reports for AI-assisted pipeline design
-3. **Group-specific threshold optimization** - Different optimal thresholds per group
+1. **Prevalence threshold optimization** - Implemented via spike-in validation with multiple optimization criteria
+2. **LLM-friendly profiling** - Structured YAML/markdown output for AI-assisted pipeline design
+3. **TMM normalization** - edgeR-style trimmed mean of M-values
+4. **Permutation tests** - Distribution-free hypothesis testing
 
 ### Future Work
 
-- TMM normalization
 - Linear mixed models (longitudinal data)
-- Permutation tests
 - Beta-binomial models
 - Hurdle models
+- ALR normalization with reference selection
+- CSS normalization (metagenomeSeq-style)
 
 ---
 
@@ -1128,23 +1130,25 @@ fn main() -> Result<(), Error> {
 
 ## Future Extensions
 
-### Near-term (Next Priorities)
+### Near-term (Completed)
 
-1. **Prevalence threshold optimization**: Use spike-in validation to empirically determine optimal prevalence thresholds. Sweep across threshold values, measure sensitivity/FDR at each, identify the threshold that maximizes detection while controlling false discoveries.
+1. **Prevalence threshold optimization**: DONE - Implemented via spike-in validation with MaxF1, MaxSensitivity, MaxEfficiency, and MinFDR criteria.
 
-2. **Group-specific prevalence optimization**: Allow different prevalence thresholds for different groups (e.g., healthy samples may be sparser than disease). Optimize thresholds per group or use adaptive thresholds based on group sparsity.
+2. **Group-specific prevalence optimization**: DONE - Supports overall, any-group, and all-groups filter logic.
 
-3. **LLM-friendly data profiling**: Generate structured summaries (markdown/JSON) that capture data characteristics and their implications for method selection. Enable AI-assisted pipeline recommendation based on data structure.
+3. **LLM-friendly data profiling**: DONE - Generates structured YAML/markdown summaries for AI-assisted pipeline recommendation.
+
+4. **TMM normalization**: DONE - edgeR-style trimmed mean of M-values with configurable parameters.
+
+5. **Permutation tests**: DONE - Distribution-free hypothesis testing with parallel execution.
 
 ### Medium-term (Model Extensions)
 
 4. **Linear mixed models (LMM)**: Support longitudinal and repeated-measures designs with random effects for subjects.
 
-5. **Permutation tests**: Distribution-free alternative to parametric tests, useful when model assumptions are uncertain.
+5. **Beta-binomial models**: corncob-style modeling of both abundance and dispersion as functions of covariates.
 
-6. **Beta-binomial models**: corncob-style modeling of both abundance and dispersion as functions of covariates.
-
-7. **Hurdle models**: Explicit two-part models separating presence/absence from abundance among present features.
+6. **Hurdle models**: Explicit two-part models separating presence/absence from abundance among present features.
 
 ### Long-term (Advanced Features)
 
@@ -1159,3 +1163,7 @@ fn main() -> Result<(), Error> {
 ### Completed (Originally Future)
 
 - ~~Effect size shrinkage~~: Implemented with empirical Bayes estimation (Normal/Adaptive methods)
+- ~~TMM normalization~~: Implemented with configurable trimming and reference sample selection
+- ~~Permutation tests~~: Implemented with parallel execution via rayon
+- ~~Prevalence threshold optimization~~: Implemented with spike-in validation and multiple criteria
+- ~~LLM-friendly profiling~~: Implemented with YAML and markdown output formats

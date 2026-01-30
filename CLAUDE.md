@@ -14,7 +14,7 @@ A Rust library for **differential abundance analysis (DAA)** of sparse count dat
 ## Our Solution
 
 ### 1. Composable Primitives
-All DAA methods are combinations of: filter → zero-handle → normalize → model → test → correct
+All DAA methods are combinations of: filter -> zero-handle -> normalize -> model -> test -> correct
 
 We expose each step as independent primitives that can be mixed and matched.
 
@@ -32,7 +32,7 @@ Use spike-in validation to find optimal prevalence thresholds rather than guessi
 ```
 src/
 ├── data/           # Core data structures
-│   ├── count_matrix.rs   # Sparse count matrix (features × samples)
+│   ├── count_matrix.rs   # Sparse count matrix (features x samples)
 │   ├── metadata.rs       # Sample metadata with type inference
 │   ├── formula.rs        # R-style formula parsing
 │   ├── design_matrix.rs  # Design matrix construction
@@ -40,7 +40,8 @@ src/
 ├── profile/        # Data characterization
 │   ├── sparsity.rs       # Zero patterns
 │   ├── prevalence.rs     # Feature prevalence by group
-│   └── library_size.rs   # Sequencing depth analysis
+│   ├── library_size.rs   # Sequencing depth analysis
+│   └── llm.rs            # LLM-friendly profiling for AI-assisted design
 ├── filter/         # Data filtering
 │   ├── prevalence.rs     # Overall and groupwise prevalence filtering
 │   ├── abundance.rs      # Count-based filtering
@@ -50,7 +51,9 @@ src/
 │   └── pseudocount.rs    # Add pseudocount (fixed or adaptive)
 ├── normalize/      # Normalization methods
 │   ├── clr.rs            # Centered log-ratio
-│   └── tss.rs            # Total sum scaling
+│   ├── tss.rs            # Total sum scaling
+│   ├── tmm.rs            # Trimmed mean of M-values (edgeR-style)
+│   └── spikein.rs        # Spike-in normalization for absolute abundance
 ├── model/          # Statistical models
 │   ├── lm.rs             # Linear model (QR decomposition)
 │   ├── nb.rs             # Negative binomial GLM (IRLS)
@@ -59,7 +62,8 @@ src/
 │   └── shrink.rs         # Empirical Bayes effect size shrinkage
 ├── test/           # Hypothesis testing
 │   ├── wald.rs           # Wald test for coefficients
-│   └── lrt.rs            # Likelihood ratio test
+│   ├── lrt.rs            # Likelihood ratio test
+│   └── permutation.rs    # Permutation tests (distribution-free)
 ├── correct/        # Multiple testing correction
 │   └── bh.rs             # Benjamini-Hochberg FDR
 ├── spike/          # Spike-in validation framework
@@ -68,7 +72,11 @@ src/
 │   ├── presence.rs       # Presence/absence spike-ins
 │   ├── evaluate.rs       # Sensitivity/FDR evaluation
 │   ├── validate.rs       # Full validation runs
-│   └── stress.rs         # Compositional stress testing
+│   ├── stress.rs         # Compositional stress testing
+│   └── optimize.rs       # Prevalence threshold optimization
+├── benchmark/      # Benchmarking utilities
+│   ├── synthetic.rs      # Synthetic data generation with ground truth
+│   └── datasets.rs       # Classic benchmark dataset fetcher (Zenodo)
 ├── pipeline/       # Pipeline composition
 │   └── runner.rs         # Pipeline builder and executor
 ├── error.rs        # Error types
@@ -82,7 +90,7 @@ src/
 ### Consistent Return Types
 - Filtering returns `FilterResult { kept, removed, kept_ids, removed_ids }`
 - Models return `*Fit` structs with coefficients, std errors, fit statistics
-- Tests return `WaldResult` or `LrtResult` with p-values and statistics
+- Tests return `WaldResult`, `LrtResult`, or `PermutationResults` with p-values and statistics
 
 ### Prevalence-Aware Design
 - `PrevalenceTier` enum: Ubiquitous, Moderate, GroupSpecific, Rare
@@ -106,34 +114,30 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (194 tests passing)
+## Current Status (254 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix)
-- Profiling (sparsity, prevalence, library size)
+- Profiling (sparsity, prevalence, library size, LLM-friendly output)
 - Filtering (prevalence, abundance, library size, stratified)
 - Zero handling (pseudocount)
-- Normalization (CLR, TSS)
+- Normalization (CLR, TSS, TMM, spike-in)
 - Models (LM, NB, ZINB with model comparison and shrinkage)
-- Testing (Wald, LRT)
+- Testing (Wald, LRT, permutation)
 - Correction (Benjamini-Hochberg)
-- Spike-in validation (abundance, presence, stress testing)
+- Spike-in validation (abundance, presence, stress testing, threshold optimization)
 - Pipeline composition with YAML serialization
-- CLI tool
+- Benchmarking (synthetic data generation, classic dataset fetcher)
+- CLI tool with full feature coverage
 
-### Next Priorities
-1. **Prevalence threshold optimization** - Find optimal thresholds via spike-in
-2. **LLM-friendly profiling** - Structured output for AI-assisted design
-3. **Group-specific prevalence handling** - Different thresholds per group
-
-### Future
-- TMM normalization
-- Mixed models (LMM)
-- Permutation tests
+### Future Work
+- Linear mixed models (LMM) for longitudinal data
 - Beta-binomial models
 - Hurdle models
+- ALR normalization with reference selection
+- CSS normalization (metagenomeSeq-style)
 
-## Build & Test
+## Build and Test
 
 ```bash
 cargo build
@@ -145,16 +149,35 @@ cargo run --bin daa -- --help
 
 ```bash
 # Profile data
-daa profile -c counts.tsv -m metadata.tsv -g group
+daa profile -c counts.tsv
 
-# Run pipeline
-daa run -c counts.tsv -m metadata.tsv -f "~ group" --test-coef grouptreatment
+# Generate LLM-friendly profile for AI-assisted pipeline design
+daa profile-llm -c counts.tsv -m metadata.tsv -g group
+
+# Run LinDA-style analysis
+daa linda -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+
+# Run with permutation tests (non-parametric)
+daa permutation -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+
+# Run pipeline from YAML config
+daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
 
 # Validate with spike-ins
-daa validate -c counts.tsv -m metadata.tsv -g group -t treatment
+daa validate -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment
 
 # Stress test compositional effects
-daa stress -c counts.tsv -m metadata.tsv -g group -t treatment
+daa stress -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment
+
+# Optimize prevalence threshold via spike-in
+daa optimize-prevalence -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment
+
+# Generate synthetic benchmark data
+daa generate -p typical_16s -o ./synthetic_data/
+
+# Fetch classic benchmark datasets
+daa fetch --list
+daa fetch -d ravel -o ./ravel_data/
 ```
 
 ## Design Philosophy
