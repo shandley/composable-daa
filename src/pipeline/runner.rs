@@ -13,7 +13,10 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::model::{model_lm, model_nb, model_zinb};
-use crate::normalize::{norm_alr, norm_clr, norm_tmm, norm_tss, ReferenceSelection, TransformedMatrix};
+use crate::normalize::{
+    norm_alr, norm_clr, norm_css, norm_css_with_config, norm_tmm, norm_tss,
+    CssConfig, ReferenceSelection, TransformedMatrix,
+};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::{
     test_permutation, test_wald, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
@@ -74,6 +77,11 @@ pub enum PipelineStep {
     NormalizeTSS { scale_factor: f64 },
     /// Apply TMM normalization (robust to asymmetric changes).
     NormalizeTMM { log_transform: bool },
+    /// Apply CSS normalization (metagenomeSeq-style, robust to sparsity).
+    NormalizeCSS {
+        quantile: f64,
+        log_transform: bool,
+    },
 
     // === Model Fitting ===
     /// Fit linear model.
@@ -329,6 +337,45 @@ impl Pipeline {
         self
     }
 
+    /// Add CSS normalization (cumulative sum scaling, metagenomeSeq-style).
+    ///
+    /// CSS is robust to sparsity by using quantile-based scaling factors.
+    /// Only uses counts up to a data-driven percentile for normalization.
+    pub fn normalize_css(mut self) -> Self {
+        self.steps.push(PipelineStep::NormalizeCSS {
+            quantile: 0.5,
+            log_transform: true,
+        });
+        self
+    }
+
+    /// Add CSS normalization with log transformation (default).
+    pub fn normalize_css_log(mut self) -> Self {
+        self.steps.push(PipelineStep::NormalizeCSS {
+            quantile: 0.5,
+            log_transform: true,
+        });
+        self
+    }
+
+    /// Add CSS normalization without log transformation.
+    pub fn normalize_css_raw(mut self) -> Self {
+        self.steps.push(PipelineStep::NormalizeCSS {
+            quantile: 0.5,
+            log_transform: false,
+        });
+        self
+    }
+
+    /// Add CSS normalization with custom quantile.
+    pub fn normalize_css_with_quantile(mut self, quantile: f64, log_transform: bool) -> Self {
+        self.steps.push(PipelineStep::NormalizeCSS {
+            quantile,
+            log_transform,
+        });
+        self
+    }
+
     /// Add linear model.
     pub fn model_lm(mut self, formula: &str) -> Self {
         self.steps.push(PipelineStep::ModelLM {
@@ -580,6 +627,22 @@ impl PipelineState {
                     tmm_result
                 };
                 self.transformed = Some(tmm_result.to_transformed());
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
+            PipelineStep::NormalizeCSS {
+                quantile,
+                log_transform,
+            } => {
+                // CSS works directly on counts (robust to sparsity)
+                let config = CssConfig {
+                    quantile: *quantile,
+                    log_transform: *log_transform,
+                    ..Default::default()
+                };
+                let css_result = norm_css_with_config(&self.counts, &config)?;
+                self.transformed = Some(css_result.to_transformed_matrix());
                 // Store prevalence profile for results
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
@@ -1061,5 +1124,62 @@ mod tests {
             .unwrap();
 
         assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_pipeline_with_css_normalization() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // CSS normalization doesn't require pseudocount
+        let results = Pipeline::new()
+            .name("test-css")
+            .filter_prevalence(0.3)
+            .normalize_css()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
+        assert_eq!(results.method, "test-css");
+
+        for r in results.iter() {
+            assert!(r.p_value >= 0.0 && r.p_value <= 1.0);
+            assert!(r.q_value >= 0.0 && r.q_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_css_variants() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // Test CSS raw (no log transform)
+        let results_raw = Pipeline::new()
+            .name("css-raw")
+            .filter_prevalence(0.3)
+            .normalize_css_raw()
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results_raw.len() > 0);
+
+        // Test CSS with custom quantile
+        let results_custom = Pipeline::new()
+            .name("css-custom")
+            .filter_prevalence(0.3)
+            .normalize_css_with_quantile(0.75, true)
+            .model_lm("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results_custom.len() > 0);
     }
 }

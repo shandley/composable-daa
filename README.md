@@ -83,6 +83,7 @@ for result in results.significant() {
 - **ALR** - Additive log-ratio (relative to reference taxon)
 - **TSS** - Total sum scaling (relative abundance)
 - **TMM** - Trimmed mean of M-values (edgeR-style)
+- **CSS** - Cumulative sum scaling (metagenomeSeq-style, robust to sparsity)
 - **Spike-in** - Absolute abundance via experimental spike-ins
 
 ### Models
@@ -165,7 +166,7 @@ cargo test           # Run all tests
 cargo test --lib     # Library tests only
 ```
 
-265 tests covering all components.
+279 tests covering all components.
 
 ## License
 
@@ -192,5 +193,6 @@ This library implements concepts from:
 - ANCOM-BC (Lin & Peddada, 2020)
 - ALDEx2 (Fernandes et al., 2014)
 - edgeR TMM (Robinson & Oshlack, 2010)
+- metagenomeSeq CSS (Paulson et al., 2013)
 
 The spike-in validation framework is inspired by experimental spike-in studies like Stammler et al. (2016).

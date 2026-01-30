@@ -91,6 +91,9 @@ pub mod prelude {
         norm_alr, norm_alr_default, norm_alr_with_pseudocount, AlrMatrix, ReferenceSelection,
     };
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
+    pub use crate::normalize::css::{
+        css_factors, estimate_css_quantile, norm_css, norm_css_with_config, CssConfig, CssMatrix,
+    };
     pub use crate::normalize::tmm::{norm_tmm, norm_tmm_with_config, tmm_factors, TmmConfig, TmmMatrix};
     pub use crate::normalize::tss::{norm_tss, norm_tss_with_pseudocount, TssMatrix, scale as tss_scale};
     pub use crate::normalize::spikein::{
