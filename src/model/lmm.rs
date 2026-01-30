@@ -1,7 +1,11 @@
 //! Linear Mixed Models (LMM) for longitudinal/repeated measures data.
 //!
 //! Implements mixed models with random effects for handling correlated observations:
-//! `y = Xβ + Zu + ε` where `u ~ N(0, τ²I)` and `ε ~ N(0, σ²I)`
+//! `y = Xβ + Zu + ε` where `u ~ N(0, G⊗I)` and `ε ~ N(0, σ²I)`
+//!
+//! G is the covariance matrix of random effects (q × q where q = number of random terms per group).
+//! For random intercepts only: G = [τ²]
+//! For random intercepts + slopes: G = [[τ²_intercept, τ_cov], [τ_cov, τ²_slope]]
 //!
 //! Uses REML (Restricted Maximum Likelihood) estimation for unbiased variance
 //! component estimates.
@@ -17,6 +21,9 @@
 //!     &random_design,
 //!     &LmmConfig::default(),
 //! ).unwrap();
+//!
+//! // Fit LMM with random intercepts and slopes
+//! // Formula: ~ group + time + (1 + time | subject)
 //! ```
 
 use crate::data::{DesignMatrix, MixedFormula, Metadata, RandomDesignMatrix, RandomEffect};
@@ -59,8 +66,14 @@ pub struct LmmFitSingle {
     pub coefficients: Vec<f64>,
     /// Standard errors of fixed effects.
     pub std_errors: Vec<f64>,
-    /// Variance components: [tau2 (random effect variance), sigma2 (residual variance)].
+    /// Variance components: [G_11, G_12, G_22, ..., sigma2].
+    /// For intercept only: [tau2, sigma2]
+    /// For intercept + slope: [tau2_intercept, tau_cov, tau2_slope, sigma2]
     pub variance_components: Vec<f64>,
+    /// G matrix (covariance of random effects) as flat vector (row-major).
+    /// Size: n_random_per_group × n_random_per_group
+    #[serde(skip)]
+    pub g_matrix: Vec<f64>,
     /// BLUPs (Best Linear Unbiased Predictors) for random effects.
     #[serde(skip)]
     pub random_effects: Vec<f64>,
@@ -72,8 +85,13 @@ pub struct LmmFitSingle {
     pub iterations: usize,
     /// Whether the model converged.
     pub converged: bool,
-    /// Intraclass correlation coefficient: tau2 / (tau2 + sigma2).
+    /// Intraclass correlation coefficient: tau2_intercept / (tau2_intercept + sigma2).
+    /// For random slopes, this is based on the intercept variance only.
     pub icc: f64,
+    /// Number of random effect terms per group.
+    pub n_random_per_group: usize,
+    /// Correlation between random intercept and slope (if applicable).
+    pub random_correlation: Option<f64>,
 }
 
 impl LmmFitSingle {
@@ -98,14 +116,46 @@ impl LmmFitSingle {
         }
     }
 
-    /// Get the random effect variance (tau²).
+    /// Get the random intercept variance (tau²_intercept).
+    /// For intercept-only models, this is the only random variance.
     pub fn tau_squared(&self) -> f64 {
         self.variance_components.first().copied().unwrap_or(0.0)
     }
 
+    /// Get the random slope variance (tau²_slope).
+    /// Returns None for intercept-only models.
+    pub fn tau_squared_slope(&self) -> Option<f64> {
+        if self.n_random_per_group >= 2 {
+            // For 2x2 G matrix: [G_11, G_12, G_22, sigma2]
+            // G_22 is at index 2
+            self.variance_components.get(2).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Get the covariance between random intercept and slope.
+    /// Returns None for intercept-only models.
+    pub fn tau_covariance(&self) -> Option<f64> {
+        if self.n_random_per_group >= 2 {
+            // For 2x2 G matrix: [G_11, G_12, G_22, sigma2]
+            // G_12 is at index 1
+            self.variance_components.get(1).copied()
+        } else {
+            None
+        }
+    }
+
     /// Get the residual variance (σ²).
     pub fn sigma_squared(&self) -> f64 {
-        self.variance_components.get(1).copied().unwrap_or(0.0)
+        // sigma2 is always the last element
+        self.variance_components.last().copied().unwrap_or(0.0)
+    }
+
+    /// Get the G matrix as a nalgebra DMatrix.
+    pub fn g_matrix(&self) -> DMatrix<f64> {
+        let q = self.n_random_per_group;
+        DMatrix::from_row_slice(q, q, &self.g_matrix)
     }
 }
 
@@ -118,10 +168,14 @@ pub struct LmmFit {
     pub coefficient_names: Vec<String>,
     /// Variance component names.
     pub variance_component_names: Vec<String>,
+    /// Random effect term names (e.g., ["intercept"] or ["intercept", "time"]).
+    pub random_term_names: Vec<String>,
     /// Number of samples.
     pub n_samples: usize,
     /// Number of groups (subjects).
     pub n_groups: usize,
+    /// Number of random effect terms per group.
+    pub n_random_per_group: usize,
 }
 
 impl LmmFit {
@@ -187,7 +241,9 @@ impl LmmFit {
 /// Fit linear mixed models to transformed abundance data.
 ///
 /// Fits an LMM using REML estimation for each feature:
-/// `y = Xβ + Zu + ε` where `u ~ N(0, τ²I)` and `ε ~ N(0, σ²I)`
+/// `y = Xβ + Zu + ε` where `u ~ N(0, G⊗I)` and `ε ~ N(0, σ²I)`
+///
+/// G is the covariance matrix of random effects (q × q where q = n_random_per_group).
 ///
 /// # Arguments
 /// * `transformed` - Transformed abundance data (e.g., CLR-transformed)
@@ -207,6 +263,7 @@ pub fn model_lmm(
     let n_samples = transformed.n_samples();
     let n_fixed = design.n_coefficients();
     let n_groups = random_design.n_groups;
+    let n_random_per_group = random_design.n_random_per_group;
 
     // Validate dimensions
     if design.n_samples() != n_samples {
@@ -242,18 +299,49 @@ pub fn model_lmm(
                 x,
                 z,
                 n_groups,
+                n_random_per_group,
                 config,
             )
         })
         .collect();
 
+    // Build variance component names based on G matrix structure
+    let variance_component_names = build_variance_component_names(n_random_per_group, &random_design.term_names);
+
     Ok(LmmFit {
         fits,
         coefficient_names: design.coefficient_names().to_vec(),
-        variance_component_names: vec!["tau2".to_string(), "sigma2".to_string()],
+        variance_component_names,
+        random_term_names: random_design.term_names.clone(),
         n_samples,
         n_groups,
+        n_random_per_group,
     })
+}
+
+/// Build variance component names based on G matrix structure.
+fn build_variance_component_names(n_random_per_group: usize, term_names: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+
+    // Add names for G matrix elements (upper triangle)
+    for i in 0..n_random_per_group {
+        for j in i..n_random_per_group {
+            if i == j {
+                names.push(format!("var_{}", term_names.get(i).unwrap_or(&format!("re_{}", i))));
+            } else {
+                names.push(format!(
+                    "cov_{}_{}",
+                    term_names.get(i).unwrap_or(&format!("re_{}", i)),
+                    term_names.get(j).unwrap_or(&format!("re_{}", j))
+                ));
+            }
+        }
+    }
+
+    // Add residual variance
+    names.push("sigma2".to_string());
+
+    names
 }
 
 /// Fit LMM to a single feature using REML.
@@ -263,29 +351,28 @@ fn fit_single_feature_lmm(
     x: &DMatrix<f64>,
     z: &DMatrix<f64>,
     n_groups: usize,
+    n_random_per_group: usize,
     config: &LmmConfig,
 ) -> LmmFitSingle {
     let n = y.len();
     let p = x.ncols();
+    let q = n_random_per_group;
     let y_vec = DVector::from_column_slice(y);
 
     // Initialize variance components from OLS residuals
-    let (sigma2_init, tau2_init) = initialize_variance_components(&y_vec, x, config);
+    let (sigma2_init, g_init) = initialize_variance_components_general(&y_vec, x, q, config);
     let mut sigma2 = sigma2_init;
-    let mut tau2 = tau2_init;
+    let mut g_matrix = g_init;
 
     let mut log_reml_prev = f64::NEG_INFINITY;
     let mut converged = false;
     let mut iterations = 0;
 
-    // Precompute ZZ'
-    let zzt = z * z.transpose();
-
     for iter in 0..config.max_iter {
         iterations = iter + 1;
 
-        // Build V = sigma2*I + tau2*ZZ'
-        let v = build_v_matrix(n, sigma2, tau2, &zzt, config.ridge);
+        // Build V = sigma2*I + Z*G_block*Z'
+        let v = build_v_matrix_general(n, sigma2, &g_matrix, z, n_groups, q, config.ridge);
 
         // Cholesky decomposition of V
         let v_chol = match v.clone().cholesky() {
@@ -297,7 +384,7 @@ fn fit_single_feature_lmm(
                     Some(c) => c,
                     None => {
                         // Give up and return OLS solution
-                        return fit_ols_fallback(&y_vec, feature_id, x, n_groups);
+                        return fit_ols_fallback(&y_vec, feature_id, x, n_groups, q);
                     }
                 }
             }
@@ -316,7 +403,7 @@ fn fit_single_feature_lmm(
                 let xtvinvx_ridge = &xtvinvx + DMatrix::identity(p, p) * config.ridge;
                 match xtvinvx_ridge.try_inverse() {
                     Some(inv) => inv,
-                    None => return fit_ols_fallback(&y_vec, feature_id, x, n_groups),
+                    None => return fit_ols_fallback(&y_vec, feature_id, x, n_groups, q),
                 }
             }
         };
@@ -333,7 +420,7 @@ fn fit_single_feature_lmm(
         let log_det_v = 2.0 * v_chol.l().diagonal().map(|x| x.ln()).sum();
         let log_det_xtvinvx = match xtvinvx.clone().cholesky() {
             Some(c) => 2.0 * c.l().diagonal().map(|x| x.ln()).sum(),
-            None => p as f64 * xtvinvx[(0, 0)].ln(), // Fallback approximation
+            None => p as f64 * xtvinvx[(0, 0)].abs().ln(), // Fallback approximation
         };
         let v_inv_r = v_chol.solve(&residuals);
         let quad_form = residuals.dot(&v_inv_r);
@@ -347,49 +434,23 @@ fn fit_single_feature_lmm(
         log_reml_prev = log_reml;
 
         if converged {
-            // Compute final results
-            let coefficients: Vec<f64> = beta.iter().cloned().collect();
-            let std_errors: Vec<f64> = (0..p)
-                .map(|j| xtvinvx_inv[(j, j)].max(0.0).sqrt())
-                .collect();
-
-            // BLUPs: u = tau2 * Z'V^-1(y - Xb)
-            let random_effects: Vec<f64> = (tau2 * z.transpose() * &v_inv_r)
-                .iter()
-                .cloned()
-                .collect();
-
-            // ICC
-            let icc = tau2 / (tau2 + sigma2);
-
-            // Approximate df (Satterthwaite would be more accurate but complex)
-            let df_residual = (n - p) as f64;
-
-            return LmmFitSingle {
-                feature_id: feature_id.to_string(),
-                coefficients,
-                std_errors,
-                variance_components: vec![tau2, sigma2],
-                random_effects,
-                log_reml,
-                df_residual,
-                iterations,
-                converged: true,
-                icc,
-            };
+            return build_final_result(
+                feature_id, &beta, &xtvinvx_inv, &g_matrix, sigma2, z, &v_inv_r,
+                n, p, q, n_groups, log_reml, iterations, true,
+            );
         }
 
-        // Update variance components via Newton-Raphson
-        // Use REML score equations
-        let (new_tau2, new_sigma2) =
-            update_variance_components(&v_chol, z, &residuals, sigma2, tau2, n_groups, p, config);
+        // Update variance components
+        let (new_g, new_sigma2) = update_variance_components_general(
+            &v_chol, z, &residuals, sigma2, &g_matrix, n_groups, q, p, config,
+        );
 
-        tau2 = new_tau2;
+        g_matrix = new_g;
         sigma2 = new_sigma2;
     }
 
     // Did not converge - return last estimates
-    let v = build_v_matrix(n, sigma2, tau2, &zzt, config.ridge);
+    let v = build_v_matrix_general(n, sigma2, &g_matrix, z, n_groups, q, config.ridge);
     let v_chol = v.clone().cholesky().unwrap_or_else(|| {
         let v_ridge = &v + DMatrix::identity(n, n) * 0.01;
         v_ridge.cholesky().unwrap()
@@ -405,51 +466,139 @@ fn fit_single_feature_lmm(
     let residuals = &y_vec - x * &beta;
     let v_inv_r = v_chol.solve(&residuals);
 
+    build_final_result(
+        feature_id, &beta, &xtvinvx_inv, &g_matrix, sigma2, z, &v_inv_r,
+        n, p, q, n_groups, log_reml_prev, iterations, false,
+    )
+}
+
+/// Build final LmmFitSingle result from computed values.
+fn build_final_result(
+    feature_id: &str,
+    beta: &DVector<f64>,
+    xtvinvx_inv: &DMatrix<f64>,
+    g_matrix: &DMatrix<f64>,
+    sigma2: f64,
+    z: &DMatrix<f64>,
+    v_inv_r: &DVector<f64>,
+    n: usize,
+    p: usize,
+    q: usize,
+    n_groups: usize,
+    log_reml: f64,
+    iterations: usize,
+    converged: bool,
+) -> LmmFitSingle {
     let coefficients: Vec<f64> = beta.iter().cloned().collect();
     let std_errors: Vec<f64> = (0..p)
         .map(|j| xtvinvx_inv[(j, j)].max(0.0).sqrt())
         .collect();
-    let random_effects: Vec<f64> = (tau2 * z.transpose() * &v_inv_r)
+
+    // BLUPs: u = G_block * Z'V^-1(y - Xb)
+    // For efficiency, compute group by group
+    let g_block = build_g_block(g_matrix, n_groups, q);
+    let random_effects: Vec<f64> = (&g_block * z.transpose() * v_inv_r)
         .iter()
         .cloned()
         .collect();
-    let icc = tau2 / (tau2 + sigma2);
+
+    // Build variance components vector (upper triangle of G + sigma2)
+    let mut variance_components = Vec::new();
+    for i in 0..q {
+        for j in i..q {
+            variance_components.push(g_matrix[(i, j)]);
+        }
+    }
+    variance_components.push(sigma2);
+
+    // G matrix as flat vector
+    let g_flat: Vec<f64> = g_matrix.iter().cloned().collect();
+
+    // ICC based on intercept variance (first diagonal element of G)
+    let tau2_intercept = g_matrix[(0, 0)];
+    let icc = tau2_intercept / (tau2_intercept + sigma2);
+
+    // Random correlation (for random slopes)
+    let random_correlation = if q >= 2 {
+        let tau2_slope = g_matrix[(1, 1)];
+        let tau_cov = g_matrix[(0, 1)];
+        let denom = (tau2_intercept * tau2_slope).sqrt();
+        if denom > 0.0 {
+            Some(tau_cov / denom)
+        } else {
+            Some(0.0)
+        }
+    } else {
+        None
+    };
+
+    // Approximate df
+    let df_residual = (n - p) as f64;
 
     LmmFitSingle {
         feature_id: feature_id.to_string(),
         coefficients,
         std_errors,
-        variance_components: vec![tau2, sigma2],
+        variance_components,
+        g_matrix: g_flat,
         random_effects,
-        log_reml: log_reml_prev,
-        df_residual: (n - p) as f64,
+        log_reml,
+        df_residual,
         iterations,
-        converged: false,
+        converged,
         icc,
+        n_random_per_group: q,
+        random_correlation,
     }
 }
 
-/// Build V matrix: V = sigma2*I + tau2*ZZ'
-fn build_v_matrix(
+/// Build V matrix: V = sigma2*I + Z*G_block*Z'
+/// where G_block is block-diagonal with G repeated n_groups times.
+fn build_v_matrix_general(
     n: usize,
     sigma2: f64,
-    tau2: f64,
-    zzt: &DMatrix<f64>,
+    g: &DMatrix<f64>,
+    z: &DMatrix<f64>,
+    n_groups: usize,
+    q: usize,
     ridge: f64,
 ) -> DMatrix<f64> {
-    let mut v = zzt * tau2;
+    // Build block-diagonal G_block (n_groups*q × n_groups*q)
+    let g_block = build_g_block(g, n_groups, q);
+
+    // V = sigma2*I + Z * G_block * Z'
+    let z_g_block = z * &g_block;
+    let mut v = &z_g_block * z.transpose();
+
     for i in 0..n {
         v[(i, i)] += sigma2 + ridge;
     }
     v
 }
 
+/// Build block-diagonal G matrix for all groups.
+fn build_g_block(g: &DMatrix<f64>, n_groups: usize, q: usize) -> DMatrix<f64> {
+    let total_size = n_groups * q;
+    let mut g_block = DMatrix::zeros(total_size, total_size);
+
+    for group in 0..n_groups {
+        let offset = group * q;
+        for i in 0..q {
+            for j in 0..q {
+                g_block[(offset + i, offset + j)] = g[(i, j)];
+            }
+        }
+    }
+    g_block
+}
+
 /// Initialize variance components from OLS residuals.
-fn initialize_variance_components(
+fn initialize_variance_components_general(
     y: &DVector<f64>,
     x: &DMatrix<f64>,
+    q: usize,
     config: &LmmConfig,
-) -> (f64, f64) {
+) -> (f64, DMatrix<f64>) {
     let n = y.len();
     let p = x.ncols();
 
@@ -468,65 +617,136 @@ fn initialize_variance_components(
 
     let df = (n - p).max(1);
     let sigma2 = (rss / df as f64).max(config.var_lower_bound);
-    let tau2 = (0.1 * sigma2).max(config.var_lower_bound);
 
-    (sigma2, tau2)
+    // Initialize G as diagonal matrix with tau2 = 0.1 * sigma2
+    let tau2 = (0.1 * sigma2).max(config.var_lower_bound);
+    let mut g = DMatrix::zeros(q, q);
+    for i in 0..q {
+        g[(i, i)] = tau2;
+    }
+
+    (sigma2, g)
 }
 
-/// Update variance components using REML score equations.
-fn update_variance_components(
+/// Update variance components using REML moment-based estimation.
+fn update_variance_components_general(
     v_chol: &nalgebra::Cholesky<f64, nalgebra::Dyn>,
     z: &DMatrix<f64>,
     residuals: &DVector<f64>,
     sigma2: f64,
-    tau2: f64,
+    g: &DMatrix<f64>,
     n_groups: usize,
+    q: usize,
     p: usize,
     config: &LmmConfig,
-) -> (f64, f64) {
+) -> (DMatrix<f64>, f64) {
     let n = residuals.len();
 
     // Compute V^-1 r
     let v_inv_r = v_chol.solve(residuals);
 
-    // Compute trace terms for REML score
-    // For tau2: d(log|V|)/d(tau2) = tr(V^-1 ZZ')
-    // For sigma2: d(log|V|)/d(sigma2) = tr(V^-1)
-
-    // Approximate traces using the diagonal of V^-1
-    // This is a simplification - full computation would be more expensive
-    let v_inv_diag: Vec<f64> = (0..n)
-        .map(|i| {
-            let ei = DVector::from_fn(n, |j, _| if j == i { 1.0 } else { 0.0 });
-            let v_inv_ei = v_chol.solve(&ei);
-            v_inv_ei[i]
-        })
-        .collect();
-
-    // Quadratic forms
+    // Quadratic form for residual variance
     let r_vinv_r = residuals.dot(&v_inv_r);
-
-    // Simple moment-based update (more robust than Newton)
-    // sigma2 = (1/n) * r'V^-1 r
-    // tau2 = estimated from between-group variance
-
     let new_sigma2 = (r_vinv_r / (n - p) as f64).max(config.var_lower_bound);
 
-    // Estimate tau2 from between-group variance
-    // Use the fact that for balanced designs, tau2 ≈ (MSB - MSW) / n_per_group
+    // Update G matrix using moment-based estimation
+    // For each group, estimate the outer product of random effects
     let ztr = z.transpose() * &v_inv_r;
-    let ss_between: f64 = ztr.iter().map(|x| x * x).sum();
-    let new_tau2 = (ss_between / n_groups as f64).max(config.var_lower_bound);
+
+    let mut new_g = DMatrix::zeros(q, q);
+
+    // Estimate G from cross-products of Z'V^-1 r grouped by subject
+    for group in 0..n_groups {
+        let offset = group * q;
+        for i in 0..q {
+            for j in 0..q {
+                new_g[(i, j)] += ztr[offset + i] * ztr[offset + j];
+            }
+        }
+    }
+    new_g /= n_groups as f64;
+
+    // Ensure G is positive semi-definite
+    let new_g = ensure_positive_semidefinite(&new_g, config.var_lower_bound);
 
     // Damped update to prevent oscillation
     let alpha = 0.5;
-    let tau2_updated = alpha * new_tau2 + (1.0 - alpha) * tau2;
+    let g_updated = &new_g * alpha + g * (1.0 - alpha);
     let sigma2_updated = alpha * new_sigma2 + (1.0 - alpha) * sigma2;
 
     (
-        tau2_updated.max(config.var_lower_bound),
+        ensure_positive_semidefinite(&g_updated, config.var_lower_bound),
         sigma2_updated.max(config.var_lower_bound),
     )
+}
+
+/// Ensure matrix is positive semi-definite.
+fn ensure_positive_semidefinite(m: &DMatrix<f64>, min_eigenvalue: f64) -> DMatrix<f64> {
+    let q = m.nrows();
+
+    if q == 1 {
+        // 1x1 case: just ensure positive
+        let mut result = m.clone();
+        result[(0, 0)] = result[(0, 0)].max(min_eigenvalue);
+        return result;
+    }
+
+    if q == 2 {
+        // 2x2 case: use explicit formula
+        let a = m[(0, 0)];
+        let b = (m[(0, 1)] + m[(1, 0)]) / 2.0; // Make symmetric
+        let d = m[(1, 1)];
+
+        // Eigenvalues of 2x2 symmetric: (a+d)/2 ± sqrt((a-d)²/4 + b²)
+        let trace = a + d;
+        let det = a * d - b * b;
+
+        let discriminant = (trace * trace / 4.0 - det).max(0.0);
+        let lambda1 = trace / 2.0 + discriminant.sqrt();
+        let lambda2 = trace / 2.0 - discriminant.sqrt();
+
+        // If both eigenvalues are positive enough, return as-is (symmetric)
+        if lambda1 >= min_eigenvalue && lambda2 >= min_eigenvalue {
+            let mut result = m.clone();
+            result[(0, 1)] = b;
+            result[(1, 0)] = b;
+            return result;
+        }
+
+        // Otherwise, reconstruct with clipped eigenvalues
+        let lambda1_new = lambda1.max(min_eigenvalue);
+        let lambda2_new = lambda2.max(min_eigenvalue);
+
+        // Handle diagonal case
+        if b.abs() < 1e-10 {
+            let mut result = DMatrix::zeros(2, 2);
+            result[(0, 0)] = a.max(min_eigenvalue);
+            result[(1, 1)] = d.max(min_eigenvalue);
+            return result;
+        }
+
+        // Eigenvector for lambda1
+        let v1 = DVector::from_vec(vec![b, lambda1 - a]);
+        let v1_norm = v1.norm();
+        let v1 = if v1_norm > 1e-10 { v1 / v1_norm } else { DVector::from_vec(vec![1.0, 0.0]) };
+        let v2 = DVector::from_vec(vec![-v1[1], v1[0]]); // Orthogonal
+
+        // Reconstruct: V * diag(lambda) * V'
+        let mut result = DMatrix::zeros(2, 2);
+        for i in 0..2 {
+            for j in 0..2 {
+                result[(i, j)] = lambda1_new * v1[i] * v1[j] + lambda2_new * v2[i] * v2[j];
+            }
+        }
+        return result;
+    }
+
+    // For larger matrices, use diagonal dominance approach
+    let mut result = m.clone();
+    for i in 0..q {
+        result[(i, i)] = result[(i, i)].max(min_eigenvalue);
+    }
+    result
 }
 
 /// Fallback to OLS when LMM fails to converge.
@@ -535,6 +755,7 @@ fn fit_ols_fallback(
     feature_id: &str,
     x: &DMatrix<f64>,
     n_groups: usize,
+    q: usize,
 ) -> LmmFitSingle {
     let n = y.len();
     let p = x.ncols();
@@ -559,17 +780,24 @@ fn fit_ols_fallback(
         .map(|j| (sigma2 * xtx_inv[(j, j)]).max(0.0).sqrt())
         .collect();
 
+    // Build variance components (all zeros for G + sigma2)
+    let mut variance_components = vec![0.0; q * (q + 1) / 2];
+    variance_components.push(sigma2);
+
     LmmFitSingle {
         feature_id: feature_id.to_string(),
         coefficients,
         std_errors,
-        variance_components: vec![0.0, sigma2], // tau2 = 0 (no random effect estimated)
-        random_effects: vec![0.0; n_groups],
+        variance_components,
+        g_matrix: vec![0.0; q * q],
+        random_effects: vec![0.0; n_groups * q],
         log_reml: f64::NAN,
         df_residual: df as f64,
         iterations: 0,
         converged: false,
         icc: 0.0,
+        n_random_per_group: q,
+        random_correlation: if q >= 2 { Some(0.0) } else { None },
     }
 }
 
@@ -862,5 +1090,70 @@ mod tests {
 
         let result = model_lmm(&transformed, &design, &random_design, &LmmConfig::default());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_model_lmm_random_slope() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 + time | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+        let config = LmmConfig::default();
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // Check that random slopes are properly configured
+        assert_eq!(fit.n_random_per_group, 2); // intercept + time slope
+        assert_eq!(fit.random_term_names, vec!["intercept", "time"]);
+
+        // Each single fit should have G matrix with 4 elements (2x2)
+        let single = fit.get_feature("treatment_effect").unwrap();
+        assert_eq!(single.n_random_per_group, 2);
+        assert_eq!(single.g_matrix.len(), 4); // 2x2 = 4
+
+        // Should have correlation estimate for random intercept-slope
+        assert!(single.random_correlation.is_some());
+    }
+
+    #[test]
+    fn test_fit_lmm_from_formula_with_random_slope() {
+        let metadata = create_longitudinal_metadata();
+        let transformed = create_longitudinal_transformed();
+
+        let fit = fit_lmm_from_formula(
+            &transformed,
+            &metadata,
+            "~ group + (1 + time | subject)",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(fit.n_features(), 3);
+        assert_eq!(fit.n_groups, 4);
+        assert_eq!(fit.n_random_per_group, 2);
+        assert_eq!(fit.random_term_names, vec!["intercept", "time"]);
+    }
+
+    #[test]
+    fn test_model_lmm_random_slope_only() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(0 + time | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+        let config = LmmConfig::default();
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // Check that only random slope (no intercept) is configured
+        assert_eq!(fit.n_random_per_group, 1);
+        assert_eq!(fit.random_term_names, vec!["time"]);
+
+        // No correlation estimate for single random term
+        let single = fit.get_feature("treatment_effect").unwrap();
+        assert!(single.random_correlation.is_none());
     }
 }

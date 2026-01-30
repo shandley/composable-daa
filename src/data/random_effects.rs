@@ -267,19 +267,23 @@ pub struct RandomDesignMatrix {
     pub group_ids: Vec<String>,
     /// Number of groups.
     pub n_groups: usize,
-    /// Number of random effect terms per group.
+    /// Number of random effect terms per group (1 for intercept only, 2 for intercept+slope, etc.).
     pub n_random_per_group: usize,
     /// Sample IDs.
     pub sample_ids: Vec<String>,
+    /// Names of random effect terms (e.g., ["intercept"] or ["intercept", "time"]).
+    pub term_names: Vec<String>,
 }
 
 impl RandomDesignMatrix {
     /// Build the random effects design matrix from metadata and a random effect.
     ///
-    /// Currently supports:
-    /// - Random intercepts: `(1 | group)`
+    /// Supports:
+    /// - Random intercepts: `(1 | group)` - Z has one column per group
+    /// - Random intercepts + slopes: `(1 + x | group)` - Z has two columns per group
+    /// - Random slopes only: `(0 + x | group)` - Z has one column per group (slope only)
     ///
-    /// Future: Random slopes
+    /// For random slopes, the slope variable must be numeric (continuous) in metadata.
     pub fn from_random_effect(
         metadata: &Metadata,
         random_effect: &RandomEffect,
@@ -319,23 +323,61 @@ impl RandomDesignMatrix {
         }
 
         let n_groups = group_ids.len();
-
-        // For now, only support random intercepts
-        if !random_effect.is_intercept_only() {
-            return Err(DaaError::NotImplemented(
-                "Random slopes not yet implemented. Use (1 | group) for random intercepts only.".to_string(),
-            ));
-        }
-
-        let n_random_per_group = 1; // Only intercepts for now
+        let n_random_per_group = random_effect.n_terms();
         let n_random_total = n_groups * n_random_per_group;
 
+        // Get slope variable values if needed
+        let slope_values: Vec<Vec<f64>> = random_effect
+            .terms
+            .iter()
+            .filter(|t| *t != "1")
+            .map(|term| {
+                let col = metadata.column(term)?;
+                col.iter()
+                    .map(|v| match v {
+                        Variable::Continuous(x) => Ok(*x),
+                        Variable::Ordinal(x) => Ok(*x as f64),
+                        Variable::Categorical(_) => Err(DaaError::InvalidParameter(format!(
+                            "Random slope variable '{}' must be numeric, not categorical",
+                            term
+                        ))),
+                        Variable::Missing => Err(DaaError::InvalidParameter(format!(
+                            "Missing values not allowed in random slope variable '{}'",
+                            term
+                        ))),
+                    })
+                    .collect::<Result<Vec<f64>>>()
+            })
+            .collect::<Result<Vec<Vec<f64>>>>()?;
+
+        // Build term names
+        let term_names: Vec<String> = random_effect
+            .terms
+            .iter()
+            .map(|t| if t == "1" { "intercept".to_string() } else { t.clone() })
+            .collect();
+
         // Build Z matrix
-        // For random intercepts: Z[i, j] = 1 if sample i belongs to group j, else 0
+        // Layout: for each group, columns for each term
+        // E.g., for (1 + time | subject) with groups A, B:
+        // [A_intercept, A_time, B_intercept, B_time]
         let mut z = DMatrix::zeros(n_samples, n_random_total);
 
         for (sample_idx, &group_idx) in group_indices.iter().enumerate() {
-            z[(sample_idx, group_idx)] = 1.0;
+            let col_offset = group_idx * n_random_per_group;
+
+            let mut slope_idx = 0;
+            for (term_idx, term) in random_effect.terms.iter().enumerate() {
+                let col = col_offset + term_idx;
+                if term == "1" {
+                    // Intercept: value is 1
+                    z[(sample_idx, col)] = 1.0;
+                } else {
+                    // Slope: value is the covariate value
+                    z[(sample_idx, col)] = slope_values[slope_idx][sample_idx];
+                    slope_idx += 1;
+                }
+            }
         }
 
         Ok(Self {
@@ -345,6 +387,7 @@ impl RandomDesignMatrix {
             n_groups,
             n_random_per_group,
             sample_ids,
+            term_names,
         })
     }
 
@@ -370,6 +413,11 @@ impl RandomDesignMatrix {
             counts[idx] += 1;
         }
         counts
+    }
+
+    /// Check if this is a random intercept only model.
+    pub fn is_intercept_only(&self) -> bool {
+        self.n_random_per_group == 1 && self.term_names.first().map_or(false, |t| t == "intercept")
     }
 }
 
@@ -532,5 +580,51 @@ mod tests {
         let obs = z.observations_per_group();
         // Each subject has 2 observations
         assert!(obs.iter().all(|&n| n == 2));
+    }
+
+    #[test]
+    fn test_random_design_matrix_with_slope() {
+        let metadata = create_test_metadata();
+        let re = RandomEffect::parse("(1 + time | subject)").unwrap();
+        let z = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+
+        assert_eq!(z.n_samples(), 8);
+        assert_eq!(z.n_groups, 4); // A, B, C, D
+        assert_eq!(z.n_random_per_group, 2); // intercept + time
+        assert_eq!(z.n_random_effects(), 8); // 4 groups * 2 terms
+        assert_eq!(z.term_names, vec!["intercept", "time"]);
+
+        // Check structure: matrix should be 8 x 8
+        assert_eq!(z.matrix.nrows(), 8);
+        assert_eq!(z.matrix.ncols(), 8);
+
+        // For each sample, check intercept and time columns for its group
+        // Sample S1 (time=0, subject A) should have intercept=1, time=0
+        // Sample S2 (time=1, subject A) should have intercept=1, time=1
+        let a_idx = z.group_indices[0];
+        let intercept_col = a_idx * 2;
+        let time_col = a_idx * 2 + 1;
+
+        // S1: time=0
+        assert_eq!(z.matrix[(0, intercept_col)], 1.0);
+        assert_eq!(z.matrix[(0, time_col)], 0.0);
+
+        // S2: time=1
+        assert_eq!(z.matrix[(1, intercept_col)], 1.0);
+        assert_eq!(z.matrix[(1, time_col)], 1.0);
+    }
+
+    #[test]
+    fn test_random_design_matrix_slope_only() {
+        let metadata = create_test_metadata();
+        let re = RandomEffect::parse("(0 + time | subject)").unwrap();
+        let z = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+
+        assert_eq!(z.n_samples(), 8);
+        assert_eq!(z.n_groups, 4);
+        assert_eq!(z.n_random_per_group, 1); // time only
+        assert_eq!(z.n_random_effects(), 4); // 4 groups * 1 term
+        assert_eq!(z.term_names, vec!["time"]);
+        assert!(!z.is_intercept_only());
     }
 }
