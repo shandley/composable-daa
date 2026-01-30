@@ -13,14 +13,14 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::data::{MixedFormula, RandomDesignMatrix};
-use crate::model::{fit_lmm_from_formula, model_lm, model_nb, model_zinb};
+use crate::model::{fit_lmm_from_formula, model_bb, model_lm, model_nb, model_zinb};
 use crate::normalize::{
     norm_alr, norm_clr, norm_css, norm_css_with_config, norm_tmm, norm_tss,
     CssConfig, ReferenceSelection, TransformedMatrix,
 };
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::{
-    test_permutation, test_wald, test_wald_lmm, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
+    test_permutation, test_wald, test_wald_bb, test_wald_lmm, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
 };
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,8 @@ pub enum PipelineStep {
     ModelNB { formula: String },
     /// Fit zero-inflated negative binomial GLM.
     ModelZINB { formula: String },
+    /// Fit beta-binomial GLM (for proportions with overdispersion).
+    ModelBB { formula: String },
 
     // === Testing ===
     /// Wald test for a coefficient.
@@ -427,6 +429,19 @@ impl Pipeline {
         self
     }
 
+    /// Add beta-binomial GLM.
+    ///
+    /// Fits a beta-binomial model that handles overdispersion in proportions.
+    /// Models counts as proportions of library size with extra-binomial variation.
+    ///
+    /// Does not require normalization (works on raw counts).
+    pub fn model_bb(mut self, formula: &str) -> Self {
+        self.steps.push(PipelineStep::ModelBB {
+            formula: formula.to_string(),
+        });
+        self
+    }
+
     /// Add Wald test.
     pub fn test_wald(mut self, coefficient: &str) -> Self {
         self.steps.push(PipelineStep::TestWald {
@@ -493,6 +508,7 @@ struct PipelineState {
     lmm_fit: Option<crate::model::LmmFit>,
     nb_fit: Option<crate::model::NbFit>,
     zinb_fit: Option<crate::model::ZinbFit>,
+    bb_fit: Option<crate::model::BbFit>,
     wald_result: Option<crate::test::WaldResult>,
     permutation_result: Option<PermutationResults>,
     bh_corrected: Option<crate::correct::bh::BhCorrected>,
@@ -512,6 +528,7 @@ impl PipelineState {
             lmm_fit: None,
             nb_fit: None,
             zinb_fit: None,
+            bb_fit: None,
             wald_result: None,
             permutation_result: None,
             bh_corrected: None,
@@ -723,9 +740,20 @@ impl PipelineState {
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
 
+            PipelineStep::ModelBB { formula } => {
+                let parsed_formula = Formula::parse(formula)?;
+                self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                self.formula_str = Some(formula.clone());
+                let design = self.design.as_ref().unwrap();
+                // BB model works directly on counts (no normalization needed)
+                self.bb_fit = Some(model_bb(&self.counts, design)?);
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             // === Testing ===
             PipelineStep::TestWald { coefficient } => {
-                // Check for LM fit first, then LMM, then NB fit, then ZINB fit
+                // Check for LM fit first, then LMM, then NB fit, then ZINB fit, then BB fit
                 if let Some(fit) = self.lm_fit.as_ref() {
                     self.wald_result = Some(test_wald(fit, coefficient)?);
                 } else if let Some(fit) = self.lmm_fit.as_ref() {
@@ -734,6 +762,8 @@ impl PipelineState {
                     self.wald_result = Some(test_wald_nb(fit, coefficient)?);
                 } else if let Some(fit) = self.zinb_fit.as_ref() {
                     self.wald_result = Some(test_wald_zinb(fit, coefficient)?);
+                } else if let Some(fit) = self.bb_fit.as_ref() {
+                    self.wald_result = Some(test_wald_bb(fit, coefficient)?);
                 } else {
                     return Err(DaaError::Pipeline(
                         "Must fit model before Wald test".to_string(),
@@ -1320,5 +1350,49 @@ mod tests {
         let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
         assert_eq!(parsed.name, "lmm-pipeline");
         assert_eq!(parsed.steps.len(), 6);
+    }
+
+    #[test]
+    fn test_pipeline_with_bb() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // BB pipeline (beta-binomial for proportions with overdispersion)
+        let results = Pipeline::new()
+            .name("test-bb")
+            .filter_prevalence(0.3)
+            .model_bb("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        // Should have results for filtered features
+        assert!(results.len() > 0);
+        assert_eq!(results.method, "test-bb");
+
+        // Check that results have valid values
+        for r in results.iter() {
+            assert!(r.p_value >= 0.0 && r.p_value <= 1.0);
+            assert!(r.q_value >= 0.0 && r.q_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_bb_config_serialization() {
+        let pipeline = Pipeline::new()
+            .name("bb-pipeline")
+            .filter_prevalence(0.1)
+            .model_bb("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh();
+
+        let config = pipeline.to_config(Some("Beta-binomial pipeline for overdispersed proportions"));
+        let yaml = config.to_yaml().unwrap();
+
+        // Verify it can be parsed back
+        let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
+        assert_eq!(parsed.name, "bb-pipeline");
+        assert_eq!(parsed.steps.len(), 4);
     }
 }

@@ -1,5 +1,6 @@
 //! Statistical models for differential abundance analysis.
 
+pub mod bb;
 pub mod compare;
 pub mod lm;
 pub mod lmm;
@@ -20,3 +21,4 @@ pub use shrink::{
     ShrinkageResult, ShrunkEstimate,
 };
 pub use zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit, ZinbFitSingle};
+pub use bb::{model_bb, model_bb_with_config, BbConfig, BbFit, BbFitSingle, DispersionMethod};
