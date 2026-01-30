@@ -268,9 +268,13 @@ pub fn test_wald_zinb(fit: &ZinbFit, coefficient: &str) -> Result<WaldResult> {
 /// For LMMs, the Wald statistic t = β / SE(β) is compared to a t-distribution
 /// with degrees of freedom determined by the df_method used during fitting.
 ///
-/// If the LMM was fit with `DfMethod::Satterthwaite`, this uses the coefficient-specific
-/// Satterthwaite degrees of freedom which account for uncertainty in variance component
-/// estimates. Otherwise, it uses the naive residual df (n - p).
+/// Degrees of freedom priority:
+/// 1. Kenward-Roger df (if available) - most conservative, uses adjusted SE
+/// 2. Satterthwaite df (if available) - accounts for variance component uncertainty
+/// 3. Residual df (n - p) - naive approach
+///
+/// When Kenward-Roger was used, this also uses the bias-corrected standard errors
+/// (std_errors_kr) which are typically larger than the naive SE.
 ///
 /// # Arguments
 /// * `fit` - LMM fit results
@@ -291,10 +295,20 @@ pub fn test_wald_lmm(fit: &LmmFit, coefficient: &str) -> Result<WaldResult> {
         .iter()
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
 
-            // Use Satterthwaite df if available, otherwise fall back to residual df
-            let df = if let Some(ref satt_df) = f.df_satterthwaite {
+            // Get standard error: prefer KR adjusted SE > original SE
+            let std_error = if let Some(ref kr_se) = f.std_errors_kr {
+                kr_se.get(coef_idx).copied().unwrap_or_else(|| {
+                    f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN)
+                })
+            } else {
+                f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN)
+            };
+
+            // Get df: prefer KR df > Satterthwaite df > residual df
+            let df = if let Some(ref kr_df) = f.df_kenward_roger {
+                kr_df.get(coef_idx).copied().unwrap_or(f.df_residual)
+            } else if let Some(ref satt_df) = f.df_satterthwaite {
                 satt_df.get(coef_idx).copied().unwrap_or(f.df_residual)
             } else {
                 f.df_residual

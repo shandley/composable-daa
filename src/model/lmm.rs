@@ -42,6 +42,10 @@ pub enum DfMethod {
     /// Satterthwaite approximation: coefficient-specific df that accounts for
     /// random effects structure (more accurate Type I error control).
     Satterthwaite,
+    /// Kenward-Roger approximation: adjusts both degrees of freedom AND the
+    /// covariance matrix for finite-sample bias. More conservative than Satterthwaite,
+    /// provides better Type I error control in small samples (< 50 per group).
+    KenwardRoger,
 }
 
 /// Configuration for LMM fitting.
@@ -99,6 +103,14 @@ pub struct LmmFitSingle {
     /// None if df_method was Residual, Some(vec) if Satterthwaite was used.
     /// Each element corresponds to a coefficient in the same order as `coefficients`.
     pub df_satterthwaite: Option<Vec<f64>>,
+    /// Per-coefficient Kenward-Roger degrees of freedom.
+    /// None if df_method was not KenwardRoger, Some(vec) if KenwardRoger was used.
+    /// Each element corresponds to a coefficient in the same order as `coefficients`.
+    pub df_kenward_roger: Option<Vec<f64>>,
+    /// Kenward-Roger adjusted standard errors.
+    /// These are inflated compared to naive SE due to bias correction.
+    /// None if df_method was not KenwardRoger.
+    pub std_errors_kr: Option<Vec<f64>>,
     /// Number of iterations to convergence.
     pub iterations: usize,
     /// Whether the model converged.
@@ -459,9 +471,18 @@ fn fit_single_feature_lmm(
                 None
             };
 
+            // Compute Kenward-Roger df and adjusted SE if requested
+            let (df_kenward_roger, std_errors_kr) = if config.df_method == DfMethod::KenwardRoger {
+                let (kr_df, kr_se) = compute_kenward_roger_df(&v_chol, x, z, &xtvinvx_inv, n_groups, q);
+                (Some(kr_df), Some(kr_se))
+            } else {
+                (None, None)
+            };
+
             return build_final_result(
                 feature_id, &beta, &xtvinvx_inv, &g_matrix, sigma2, z, &v_inv_r,
                 n, p, q, n_groups, log_reml, iterations, true, df_satterthwaite,
+                df_kenward_roger, std_errors_kr,
             );
         }
 
@@ -498,13 +519,23 @@ fn fit_single_feature_lmm(
         None
     };
 
+    // Compute Kenward-Roger df and adjusted SE if requested (even for non-converged fits)
+    let (df_kenward_roger, std_errors_kr) = if config.df_method == DfMethod::KenwardRoger {
+        let (kr_df, kr_se) = compute_kenward_roger_df(&v_chol, x, z, &xtvinvx_inv, n_groups, q);
+        (Some(kr_df), Some(kr_se))
+    } else {
+        (None, None)
+    };
+
     build_final_result(
         feature_id, &beta, &xtvinvx_inv, &g_matrix, sigma2, z, &v_inv_r,
         n, p, q, n_groups, log_reml_prev, iterations, false, df_satterthwaite,
+        df_kenward_roger, std_errors_kr,
     )
 }
 
 /// Build final LmmFitSingle result from computed values.
+#[allow(clippy::too_many_arguments)]
 fn build_final_result(
     feature_id: &str,
     beta: &DVector<f64>,
@@ -521,6 +552,8 @@ fn build_final_result(
     iterations: usize,
     converged: bool,
     df_satterthwaite: Option<Vec<f64>>,
+    df_kenward_roger: Option<Vec<f64>>,
+    std_errors_kr: Option<Vec<f64>>,
 ) -> LmmFitSingle {
     let coefficients: Vec<f64> = beta.iter().cloned().collect();
     let std_errors: Vec<f64> = (0..p)
@@ -578,6 +611,8 @@ fn build_final_result(
         log_reml,
         df_residual,
         df_satterthwaite,
+        df_kenward_roger,
+        std_errors_kr,
         iterations,
         converged,
         icc,
@@ -1055,6 +1090,170 @@ pub fn compute_satterthwaite_df(
     df_satt
 }
 
+// ============================================================================
+// Kenward-Roger Degrees of Freedom Approximation
+// ============================================================================
+
+/// Compute the bias correction matrix W for Kenward-Roger adjustment.
+///
+/// W = Σ_k Σ_l [(∂Φ/∂θ_k) * I(θ)⁻¹_kl * (∂Φ/∂θ_l)]
+///
+/// where Φ = (X'V⁻¹X)⁻¹ is the naive covariance of fixed effects.
+///
+/// This follows the approximation from Halekoh & Højsgaard (2014).
+fn compute_w_matrix(
+    cov_derivs: &[DMatrix<f64>],  // ∂Φ/∂θ_k for each variance component
+    info_inv: &DMatrix<f64>,      // I(θ)⁻¹
+) -> DMatrix<f64> {
+    if cov_derivs.is_empty() {
+        return DMatrix::zeros(0, 0);
+    }
+
+    let p = cov_derivs[0].nrows();
+    let n_theta = cov_derivs.len();
+
+    let mut w = DMatrix::zeros(p, p);
+
+    for k in 0..n_theta {
+        for l in 0..n_theta {
+            // W += (∂Φ/∂θ_k) * I⁻¹_kl * (∂Φ/∂θ_l)
+            let scale = info_inv[(k, l)];
+            if scale.abs() > 1e-10 {
+                // Since ∂Φ/∂θ is symmetric, we multiply element-wise scaled
+                w += scale * &cov_derivs[k] * &cov_derivs[l];
+            }
+        }
+    }
+
+    // Ensure symmetry
+    (&w + w.transpose()) * 0.5
+}
+
+/// Compute Kenward-Roger degrees of freedom and adjusted standard errors.
+///
+/// Kenward-Roger (KR) adjusts both the covariance matrix and degrees of freedom
+/// for finite-sample bias. The bias-corrected covariance is:
+///
+/// Cov_KR(β̂) = Φ + 2*W
+///
+/// where:
+/// - Φ = (X'V⁻¹X)⁻¹ is the naive covariance
+/// - W is the bias correction matrix
+///
+/// The degrees of freedom use the adjusted variances in a Satterthwaite-style formula:
+///
+/// df_j = 2 * [Var_KR(β̂_j)]² / Var[Var_KR(β̂_j)]
+///
+/// # Returns
+/// A tuple of (df_kenward_roger, std_errors_kr) where:
+/// - df_kenward_roger: KR degrees of freedom for each coefficient
+/// - std_errors_kr: Bias-corrected standard errors for each coefficient
+pub fn compute_kenward_roger_df(
+    v_chol: &nalgebra::Cholesky<f64, nalgebra::Dyn>,
+    x: &DMatrix<f64>,
+    z: &DMatrix<f64>,
+    xtvinvx_inv: &DMatrix<f64>,  // Φ = (X'V⁻¹X)⁻¹
+    n_groups: usize,
+    q: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = x.nrows();
+    let p = x.ncols();
+
+    // Naive df for clamping
+    let df_naive = (n - p) as f64;
+
+    // Number of variance components
+    let n_theta = q * (q + 1) / 2 + 1;
+
+    // Compute information matrix for variance components
+    let info = compute_variance_info_matrix(v_chol, x, z, xtvinvx_inv, n_groups, q);
+
+    // Compute I(θ)⁻¹ with small ridge for numerical stability
+    let ridge = 1e-8;
+    let info_ridge = &info + DMatrix::identity(n_theta, n_theta) * ridge;
+    let info_inv = match info_ridge.try_inverse() {
+        Some(inv) => inv,
+        None => {
+            // Information matrix is singular, fall back to naive
+            let std_errors: Vec<f64> = (0..p)
+                .map(|j| xtvinvx_inv[(j, j)].max(0.0).sqrt())
+                .collect();
+            return (vec![df_naive; p], std_errors);
+        }
+    };
+
+    // Compute ∂Cov(β̂)/∂θ_k for each variance component
+    let cov_beta_derivs = compute_cov_beta_derivatives(v_chol, x, z, xtvinvx_inv, n_groups, q);
+
+    // Compute bias correction matrix W
+    let w_matrix = compute_w_matrix(&cov_beta_derivs, &info_inv);
+
+    // Kenward-Roger adjusted covariance: Cov_KR(β̂) = Φ + 2*W
+    let cov_kr = xtvinvx_inv + 2.0 * &w_matrix;
+
+    // Extract adjusted standard errors
+    let std_errors_kr: Vec<f64> = (0..p)
+        .map(|j| cov_kr[(j, j)].max(0.0).sqrt())
+        .collect();
+
+    // Compute Kenward-Roger df for each coefficient using the adjusted variances
+    let mut df_kr = Vec::with_capacity(p);
+
+    for j in 0..p {
+        // Var_KR(β̂_j) = Cov_KR(β̂)[j,j]
+        let var_beta_j_kr = cov_kr[(j, j)];
+
+        if var_beta_j_kr <= 0.0 {
+            df_kr.push(df_naive);
+            continue;
+        }
+
+        // For Kenward-Roger, we need the variance of the KR-adjusted variance
+        // This uses a modified gradient that accounts for the bias correction
+        //
+        // The full KR formula involves derivatives of W with respect to θ,
+        // but a common approximation is to use the gradient of the diagonal
+        // elements of Cov_KR with respect to θ and apply Satterthwaite-style formula.
+        //
+        // gradient_kr[k] = ∂Var_KR(β̂_j)/∂θ_k ≈ ∂Cov(β̂)[j,j]/∂θ_k + 2*∂W[j,j]/∂θ_k
+        //
+        // For simplicity, we approximate using the naive gradient scaled by the ratio
+        // of KR variance to naive variance (commonly used approximation).
+
+        let var_beta_j_naive = xtvinvx_inv[(j, j)];
+        let variance_ratio = if var_beta_j_naive > 1e-10 {
+            var_beta_j_kr / var_beta_j_naive
+        } else {
+            1.0
+        };
+
+        // Gradient of naive variance: gradient[k] = (∂Cov(β̂)/∂θ_k)[j,j]
+        let gradient: DVector<f64> = DVector::from_iterator(
+            n_theta,
+            cov_beta_derivs.iter().map(|d| d[(j, j)])
+        );
+
+        // Scale gradient by variance ratio for KR adjustment
+        let gradient_kr = &gradient * variance_ratio;
+
+        // Var[Var_KR(β̂_j)] ≈ gradient_kr' * I(θ)⁻¹ * gradient_kr
+        let var_var_beta_j_kr = gradient_kr.dot(&(&info_inv * &gradient_kr));
+
+        if var_var_beta_j_kr <= 0.0 {
+            df_kr.push(df_naive);
+            continue;
+        }
+
+        // df_j = 2 * [Var_KR(β̂_j)]² / Var[Var_KR(β̂_j)]
+        let df_j = 2.0 * var_beta_j_kr * var_beta_j_kr / var_var_beta_j_kr;
+
+        // Clamp to [1, n-p]
+        df_kr.push(df_j.max(1.0).min(df_naive));
+    }
+
+    (df_kr, std_errors_kr)
+}
+
 /// Fallback to OLS when LMM fails to converge.
 fn fit_ols_fallback(
     y: &DVector<f64>,
@@ -1100,6 +1299,8 @@ fn fit_ols_fallback(
         log_reml: f64::NAN,
         df_residual: df as f64,
         df_satterthwaite: None,
+        df_kenward_roger: None,
+        std_errors_kr: None,
         iterations: 0,
         converged: false,
         icc: 0.0,
@@ -1714,6 +1915,297 @@ mod tests {
                 assert!(df.is_finite(), "Satterthwaite df should be finite");
                 assert!(df >= 1.0, "Satterthwaite df should be >= 1");
             }
+        }
+    }
+
+    // ========================================================================
+    // Kenward-Roger df tests
+    // ========================================================================
+
+    #[test]
+    fn test_df_method_kenward_roger_config() {
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+        assert_eq!(config.df_method, DfMethod::KenwardRoger);
+    }
+
+    #[test]
+    fn test_kenward_roger_df_computed() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // All fits should have Kenward-Roger df computed
+        for single_fit in &fit.fits {
+            assert!(
+                single_fit.df_kenward_roger.is_some(),
+                "df_kenward_roger should be computed when DfMethod::KenwardRoger"
+            );
+            let kr_df = single_fit.df_kenward_roger.as_ref().unwrap();
+            assert_eq!(
+                kr_df.len(),
+                single_fit.coefficients.len(),
+                "Kenward-Roger df should have one value per coefficient"
+            );
+
+            // Should also have adjusted SE
+            assert!(
+                single_fit.std_errors_kr.is_some(),
+                "std_errors_kr should be computed when DfMethod::KenwardRoger"
+            );
+            let kr_se = single_fit.std_errors_kr.as_ref().unwrap();
+            assert_eq!(
+                kr_se.len(),
+                single_fit.coefficients.len(),
+                "KR standard errors should have one value per coefficient"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kenward_roger_df_not_computed_for_residual() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        let config = LmmConfig {
+            df_method: DfMethod::Residual,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // No fits should have Kenward-Roger df
+        for single_fit in &fit.fits {
+            assert!(
+                single_fit.df_kenward_roger.is_none(),
+                "df_kenward_roger should be None when DfMethod::Residual"
+            );
+            assert!(
+                single_fit.std_errors_kr.is_none(),
+                "std_errors_kr should be None when DfMethod::Residual"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kenward_roger_df_bounds() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+        let n_samples = transformed.n_samples();
+        let n_fixed = design.n_coefficients();
+        let max_df = (n_samples - n_fixed) as f64;
+
+        for single_fit in &fit.fits {
+            let kr_df = single_fit.df_kenward_roger.as_ref().unwrap();
+            for &df in kr_df {
+                assert!(df >= 1.0, "Kenward-Roger df should be >= 1, got {}", df);
+                assert!(
+                    df <= max_df,
+                    "Kenward-Roger df should be <= {} (n-p), got {}",
+                    max_df,
+                    df
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_kenward_roger_se_inflated() {
+        // KR bias correction should inflate SE compared to naive SE
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        for single_fit in &fit.fits {
+            let naive_se = &single_fit.std_errors;
+            let kr_se = single_fit.std_errors_kr.as_ref().unwrap();
+
+            // KR SE should be >= naive SE (bias correction adds positive semi-definite term)
+            for (i, (&naive, &kr)) in naive_se.iter().zip(kr_se.iter()).enumerate() {
+                assert!(
+                    kr >= naive - 1e-10,  // Small tolerance for numerical error
+                    "KR SE[{}] ({}) should be >= naive SE ({})",
+                    i, kr, naive
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_kenward_roger_with_random_slope() {
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 + time | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // Should compute Kenward-Roger df with random slopes
+        for single_fit in &fit.fits {
+            assert!(
+                single_fit.df_kenward_roger.is_some(),
+                "Should compute Kenward-Roger df even with random slopes"
+            );
+            let kr_df = single_fit.df_kenward_roger.as_ref().unwrap();
+            assert_eq!(kr_df.len(), design.n_coefficients());
+
+            // All df should be valid (finite and positive)
+            for &df in kr_df {
+                assert!(df.is_finite(), "Kenward-Roger df should be finite");
+                assert!(df >= 1.0, "Kenward-Roger df should be >= 1");
+            }
+
+            // Should also have adjusted SE
+            assert!(single_fit.std_errors_kr.is_some());
+        }
+    }
+
+    #[test]
+    fn test_kenward_roger_df_with_high_icc() {
+        // Create data with high ICC (strong within-subject correlation)
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "sample_id\tgroup\tsubject").unwrap();
+        // 6 subjects, 3 observations each
+        for subj in ['A', 'B', 'C', 'D', 'E', 'F'] {
+            let group = if subj < 'D' { "control" } else { "treatment" };
+            for obs in 1..=3 {
+                writeln!(file, "{}_{}\t{}\t{}", subj, obs, group, subj).unwrap();
+            }
+        }
+        file.flush().unwrap();
+        let metadata = Metadata::from_tsv(file.path()).unwrap();
+
+        // Create data with high within-subject correlation (high ICC)
+        let data = DMatrix::from_row_slice(
+            1,
+            18,
+            &[
+                // Subject A (control): ~1.0
+                1.0, 1.05, 0.95,
+                // Subject B (control): ~2.0
+                2.0, 2.05, 1.95,
+                // Subject C (control): ~3.0
+                3.0, 3.05, 2.95,
+                // Subject D (treatment): ~4.0
+                4.0, 4.05, 3.95,
+                // Subject E (treatment): ~5.0
+                5.0, 5.05, 4.95,
+                // Subject F (treatment): ~6.0
+                6.0, 6.05, 5.95,
+            ],
+        );
+
+        let transformed = TransformedMatrix {
+            data,
+            feature_ids: vec!["high_icc_feature".into()],
+            sample_ids: metadata.sample_ids().iter().cloned().collect(),
+            transformation: "CLR".to_string(),
+            geometric_means: vec![1.0; 18],
+        };
+
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+
+        let config = LmmConfig {
+            df_method: DfMethod::KenwardRoger,
+            ..Default::default()
+        };
+
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+        let single_fit = fit.get_feature("high_icc_feature").unwrap();
+
+        // Verify Kenward-Roger df is computed
+        assert!(single_fit.df_kenward_roger.is_some());
+        let kr_df = single_fit.df_kenward_roger.as_ref().unwrap();
+
+        // Verify df values are valid (finite, positive, bounded)
+        let naive_df = single_fit.df_residual;
+        for (i, &df) in kr_df.iter().enumerate() {
+            assert!(
+                df.is_finite(),
+                "Kenward-Roger df[{}] should be finite, got {}",
+                i, df
+            );
+            assert!(df >= 1.0, "Kenward-Roger df[{}] should be >= 1, got {}", i, df);
+            assert!(
+                df <= naive_df,
+                "Kenward-Roger df[{}] should be <= naive df ({}), got {}",
+                i, naive_df, df
+            );
+        }
+
+        // Verify ICC is high as expected from the data structure
+        assert!(
+            single_fit.icc > 0.5,
+            "Expected high ICC (>0.5), got {}",
+            single_fit.icc
+        );
+    }
+
+    #[test]
+    fn test_kenward_roger_backward_compatibility() {
+        // Test that default config does NOT produce KR results
+        let metadata = create_longitudinal_metadata();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+        let re = RandomEffect::parse("(1 | subject)").unwrap();
+        let random_design = RandomDesignMatrix::from_random_effect(&metadata, &re).unwrap();
+        let transformed = create_longitudinal_transformed();
+
+        // Default config should use DfMethod::Residual
+        let config = LmmConfig::default();
+        let fit = model_lmm(&transformed, &design, &random_design, &config).unwrap();
+
+        // Should not compute Kenward-Roger df
+        for single_fit in &fit.fits {
+            assert!(single_fit.df_kenward_roger.is_none());
+            assert!(single_fit.std_errors_kr.is_none());
         }
     }
 }
