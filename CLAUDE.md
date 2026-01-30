@@ -63,6 +63,8 @@ src/
 │   ├── lmm.rs            # Linear mixed model (REML estimation)
 │   ├── nb.rs             # Negative binomial GLM (IRLS)
 │   ├── zinb.rs           # Zero-inflated NB (EM algorithm)
+│   ├── bb.rs             # Beta-binomial GLM for proportions
+│   ├── hurdle.rs         # Hurdle model (binary + truncated NB)
 │   ├── compare.rs        # AIC/BIC model comparison
 │   └── shrink.rs         # Empirical Bayes effect size shrinkage
 ├── test/           # Hypothesis testing
@@ -128,9 +130,25 @@ Pipeline::new()
     .test_wald("grouptreatment")
     .correct_bh()
     .run(&counts, &metadata)
+
+// Beta-binomial for proportions with overdispersion
+Pipeline::new()
+    .filter_prevalence(0.1)
+    .model_bb("~ group")  // Models counts/library_size as proportions
+    .test_wald("grouptreatment")
+    .correct_bh()
+    .run(&counts, &metadata)
+
+// Hurdle model for sparse data with structural zeros
+Pipeline::new()
+    .filter_prevalence(0.1)
+    .model_hurdle("~ group")  // Binary + truncated NB
+    .test_wald("grouptreatment")  // Tests count component by default
+    .correct_bh()
+    .run(&counts, &metadata)
 ```
 
-## Current Status (327 tests passing)
+## Current Status (353 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
@@ -138,7 +156,7 @@ Pipeline::new()
 - Filtering (prevalence, abundance, library size, stratified)
 - Zero handling (pseudocount)
 - Normalization (CLR, ALR, TSS, TMM, CSS, spike-in)
-- Models (LM, LMM, NB, ZINB with model comparison and shrinkage)
+- Models (LM, LMM, NB, ZINB, BB, Hurdle with model comparison and shrinkage)
 - Linear mixed models (LMM) with REML estimation for longitudinal/repeated measures data
   - Random intercepts: `(1 | subject)`
   - Supports lme4-style formula syntax
@@ -155,10 +173,21 @@ Pipeline::new()
 - Pipeline composition with YAML serialization
 - Benchmarking (synthetic data generation, classic dataset fetcher)
 - CLI tool with full feature coverage
+- Beta-binomial GLM for proportions with overdispersion
+  - Models Y/n as BetaBinomial(n, α, β)
+  - Mean-dispersion parameterization: μ = α/(α+β), ρ = 1/(α+β+1)
+  - IRLS fitting with method-of-moments or profile ML dispersion
+  - Useful for modeling feature counts as proportions of library size
+- Hurdle model for sparse count data
+  - Two-part model: binary component (logistic) + count component (truncated NB)
+  - All zeros come from binary process (vs ZINB's mixture)
+  - Separate Wald tests for binary and count components
+  - Supports Poisson or NB for count component
 
 ### Future Work
-- Beta-binomial models
-- Hurdle models
+- CLI integration for BB and hurdle models
+- LRT for hurdle models
+- Shrinkage for BB/hurdle effect sizes
 
 ## Build and Test
 
