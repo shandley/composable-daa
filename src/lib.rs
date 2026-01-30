@@ -89,6 +89,10 @@ pub mod prelude {
     pub use crate::model::zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit};
     pub use crate::normalize::clr::{norm_clr, TransformedMatrix};
     pub use crate::normalize::tss::{norm_tss, norm_tss_with_pseudocount, TssMatrix, scale as tss_scale};
+    pub use crate::normalize::spikein::{
+        norm_spikein, norm_spikein_with_config, detect_spikein_candidates,
+        SpikeinConfig, SpikeinMatrix,
+    };
     pub use crate::pipeline::{Pipeline, PipelineStep, StratifiedPreset};
     pub use crate::profile::{
         LibrarySizeProfile, PrevalenceProfile, SparsityProfile,
