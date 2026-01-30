@@ -151,38 +151,52 @@ Pipeline::new()
 ## Current Status (368 tests passing)
 
 ### Implemented
-- Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
-- Profiling (sparsity, prevalence, library size, LLM-friendly output)
-- Filtering (prevalence, abundance, library size, stratified)
-- Zero handling (pseudocount)
-- Normalization (CLR, ALR, TSS, TMM, CSS, spike-in)
-- Models (LM, LMM, NB, ZINB, BB, Hurdle with model comparison and shrinkage)
-- Linear mixed models (LMM) with REML estimation for longitudinal/repeated measures data
-  - Random intercepts: `(1 | subject)`
-  - Supports lme4-style formula syntax
-  - Variance component estimation (G matrix, sigma²)
-  - Intraclass correlation coefficient (ICC)
-  - BLUPs for random effects
-  - Random slopes: `(1 + time | subject)`, `(0 + time | subject)`
-  - Correlation estimation between random intercept and slope
-  - Satterthwaite df approximation (coefficient-specific df accounting for variance uncertainty)
-  - Kenward-Roger df approximation (bias-corrected covariance + df for small samples)
-- Testing (Wald, LRT, permutation) - including LRT for hurdle models
-- Correction (Benjamini-Hochberg)
-- Spike-in validation (abundance, presence, stress testing, threshold optimization)
+
+**Core Infrastructure**
+- Data structures: CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix
+- Profiling: sparsity, prevalence, library size, compositionality, LLM-friendly output
+- Filtering: prevalence (overall/groupwise), abundance, library size, stratified
+- Zero handling: pseudocount (fixed or adaptive)
 - Pipeline composition with YAML serialization
-- Benchmarking (synthetic data generation, classic dataset fetcher)
 - CLI tool with full feature coverage
-- Beta-binomial GLM for proportions with overdispersion
-  - Models Y/n as BetaBinomial(n, α, β)
-  - Mean-dispersion parameterization: μ = α/(α+β), ρ = 1/(α+β+1)
-  - IRLS fitting with method-of-moments or profile ML dispersion
-  - Effect size shrinkage via `shrink_lfc_bb()`
-- Hurdle model for sparse count data
-  - Two-part model: binary component (logistic) + count component (truncated NB)
-  - All zeros come from binary process (vs ZINB's mixture)
-  - Separate Wald tests for binary and count components
-  - Effect size shrinkage for both components via `shrink_lfc_hurdle()`
+- Benchmarking: synthetic data generation, classic dataset fetcher (Zenodo)
+
+**Normalization Methods**
+- CLR (centered log-ratio)
+- ALR (additive log-ratio with reference selection)
+- TSS (total sum scaling)
+- TMM (trimmed mean of M-values, edgeR-style)
+- CSS (cumulative sum scaling, metagenomeSeq-style)
+- Spike-in normalization for absolute abundance
+
+**Statistical Models**
+- Linear model (LM) - QR decomposition
+- Linear mixed model (LMM) - REML estimation
+  - Random intercepts and slopes: `(1 | subject)`, `(1 + time | subject)`
+  - Satterthwaite and Kenward-Roger df approximations
+  - Variance components, ICC, BLUPs
+- Negative binomial GLM (NB) - IRLS fitting
+- Zero-inflated negative binomial (ZINB) - EM algorithm
+- Beta-binomial GLM (BB) - for proportions with overdispersion
+  - Mean-dispersion parameterization
+  - Method-of-moments or profile ML dispersion
+- Hurdle model - two-part model for sparse data
+  - Binary component (logistic) + count component (truncated NB)
+  - All zeros from binary process (vs ZINB mixture)
+- Model comparison via AIC/BIC
+- Effect size shrinkage for all GLM models
+
+**Hypothesis Testing**
+- Wald test (all models including LMM, BB, hurdle components)
+- Likelihood ratio test (NB, ZINB, hurdle)
+- Permutation tests (distribution-free)
+- Benjamini-Hochberg FDR correction
+
+**Spike-in Validation Framework**
+- Abundance and presence spike-ins
+- Compositional stress testing
+- Prevalence threshold optimization
+- Multiple spike modes: Raw, Compositional, Absolute
 
 ## Build and Test
 
