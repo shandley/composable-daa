@@ -41,6 +41,7 @@ src/
 │   ├── sparsity.rs       # Zero patterns
 │   ├── prevalence.rs     # Feature prevalence by group
 │   ├── library_size.rs   # Sequencing depth analysis
+│   ├── compositionality.rs # Dominance and evenness analysis
 │   └── llm.rs            # LLM-friendly profiling for AI-assisted design
 ├── filter/         # Data filtering
 │   ├── prevalence.rs     # Overall and groupwise prevalence filtering
@@ -73,9 +74,9 @@ src/
 │   ├── evaluate.rs       # Sensitivity/FDR evaluation
 │   ├── validate.rs       # Full validation runs
 │   ├── stress.rs         # Compositional stress testing
-│   └── optimize.rs       # Prevalence threshold optimization
+│   └── prevalence_opt.rs # Prevalence threshold optimization
 ├── benchmark/      # Benchmarking utilities
-│   ├── synthetic.rs      # Synthetic data generation with ground truth
+│   ├── generate.rs       # Synthetic data generation with ground truth
 │   └── datasets.rs       # Classic benchmark dataset fetcher (Zenodo)
 ├── pipeline/       # Pipeline composition
 │   └── runner.rs         # Pipeline builder and executor
