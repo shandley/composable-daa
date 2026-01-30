@@ -2,6 +2,7 @@
 
 pub mod compare;
 pub mod lm;
+pub mod lmm;
 pub mod nb;
 pub mod shrink;
 pub mod zinb;
@@ -12,6 +13,7 @@ pub use compare::{
     ModelCriteria, SelectionCriterion,
 };
 pub use lm::{model_lm, LmFit, LmFitSingle};
+pub use lmm::{fit_lmm_from_formula, model_lmm, LmmConfig, LmmFit, LmmFitSingle};
 pub use nb::{model_nb, NbFit, NbFitSingle};
 pub use shrink::{
     shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,

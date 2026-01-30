@@ -61,7 +61,7 @@ pub mod prelude {
     pub use crate::correct::bh::correct_bh;
     pub use crate::data::{
         Confidence, CountMatrix, DaResult, DaResultSet, DesignMatrix, Formula, Metadata,
-        PrevalenceTier, Term, Variable,
+        MixedFormula, PrevalenceTier, RandomDesignMatrix, RandomEffect, Term, Variable,
     };
     pub use crate::error::{DaaError, Result};
     pub use crate::filter::{
@@ -81,6 +81,7 @@ pub mod prelude {
         ModelCriteria, SelectionCriterion,
     };
     pub use crate::model::lm::{model_lm, LmFit};
+    pub use crate::model::lmm::{fit_lmm_from_formula, model_lmm, LmmConfig, LmmFit};
     pub use crate::model::nb::{model_nb, NbFit};
     pub use crate::model::shrink::{
         shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
@@ -115,7 +116,7 @@ pub mod prelude {
         test_permutation, test_permutation_quick, PermutationConfig, PermutationResult,
         PermutationResults,
     };
-    pub use crate::test::wald::{test_wald, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult};
+    pub use crate::test::wald::{test_wald, test_wald_lmm, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult};
     pub use crate::zero::pseudocount::add_pseudocount;
     pub use crate::spike::{
         AbundanceLevel, SpikeDiagnostics, SpikeEvaluation, SpikeMode, SpikeSelection,

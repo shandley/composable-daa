@@ -36,6 +36,7 @@ src/
 │   ├── metadata.rs       # Sample metadata with type inference
 │   ├── formula.rs        # R-style formula parsing
 │   ├── design_matrix.rs  # Design matrix construction
+│   ├── random_effects.rs # Random effects for mixed models (MixedFormula, RandomDesignMatrix)
 │   └── result.rs         # DAResult, DaResultSet, Confidence, PrevalenceTier
 ├── profile/        # Data characterization
 │   ├── sparsity.rs       # Zero patterns
@@ -59,6 +60,7 @@ src/
 │   └── spikein.rs        # Spike-in normalization for absolute abundance
 ├── model/          # Statistical models
 │   ├── lm.rs             # Linear model (QR decomposition)
+│   ├── lmm.rs            # Linear mixed model (REML estimation)
 │   ├── nb.rs             # Negative binomial GLM (IRLS)
 │   ├── zinb.rs           # Zero-inflated NB (EM algorithm)
 │   ├── compare.rs        # AIC/BIC model comparison
@@ -107,6 +109,7 @@ src/
 
 ### Pipeline Builder
 ```rust
+// Standard linear model pipeline
 Pipeline::new()
     .filter_prevalence(0.1)
     .add_pseudocount(0.5)
@@ -115,18 +118,34 @@ Pipeline::new()
     .test_wald("grouptreatment")
     .correct_bh()
     .run(&counts, &metadata)
+
+// Linear mixed model for longitudinal data
+Pipeline::new()
+    .filter_prevalence(0.1)
+    .add_pseudocount(0.5)
+    .normalize_clr()
+    .model_lmm("~ group + time + (1 | subject)")  // Random intercept per subject
+    .test_wald("grouptreatment")
+    .correct_bh()
+    .run(&counts, &metadata)
 ```
 
-## Current Status (279 tests passing)
+## Current Status (306 tests passing)
 
 ### Implemented
-- Core data structures (CountMatrix, Metadata, Formula, DesignMatrix)
+- Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
 - Profiling (sparsity, prevalence, library size, LLM-friendly output)
 - Filtering (prevalence, abundance, library size, stratified)
 - Zero handling (pseudocount)
 - Normalization (CLR, ALR, TSS, TMM, CSS, spike-in)
-- Models (LM, NB, ZINB with model comparison and shrinkage)
-- Testing (Wald, LRT, permutation)
+- Models (LM, LMM, NB, ZINB with model comparison and shrinkage)
+- Linear mixed models (LMM) with REML estimation for longitudinal/repeated measures data
+  - Random intercepts: `(1 | subject)`
+  - Supports lme4-style formula syntax
+  - Variance component estimation (tau², sigma²)
+  - Intraclass correlation coefficient (ICC)
+  - BLUPs for random effects
+- Testing (Wald, LRT, permutation) - including test_wald_lmm for mixed models
 - Correction (Benjamini-Hochberg)
 - Spike-in validation (abundance, presence, stress testing, threshold optimization)
 - Pipeline composition with YAML serialization
@@ -134,7 +153,8 @@ Pipeline::new()
 - CLI tool with full feature coverage
 
 ### Future Work
-- Linear mixed models (LMM) for longitudinal data
+- Random slopes for LMM: `(1 + time | subject)`
+- Satterthwaite/Kenward-Roger df approximation for LMM
 - Beta-binomial models
 - Hurdle models
 

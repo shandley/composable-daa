@@ -12,14 +12,15 @@ use crate::filter::{
     filter_prevalence_overall, filter_stratified, filter_total_count, GroupwiseLogic,
     TierThresholds,
 };
-use crate::model::{model_lm, model_nb, model_zinb};
+use crate::data::{MixedFormula, RandomDesignMatrix};
+use crate::model::{fit_lmm_from_formula, model_lm, model_nb, model_zinb};
 use crate::normalize::{
     norm_alr, norm_clr, norm_css, norm_css_with_config, norm_tmm, norm_tss,
     CssConfig, ReferenceSelection, TransformedMatrix,
 };
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::{
-    test_permutation, test_wald, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
+    test_permutation, test_wald, test_wald_lmm, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
 };
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,8 @@ pub enum PipelineStep {
     // === Model Fitting ===
     /// Fit linear model.
     ModelLM { formula: String },
+    /// Fit linear mixed model (for repeated measures/longitudinal data).
+    ModelLMM { formula: String },
     /// Fit negative binomial GLM.
     ModelNB { formula: String },
     /// Fit zero-inflated negative binomial GLM.
@@ -384,6 +387,21 @@ impl Pipeline {
         self
     }
 
+    /// Add linear mixed model for repeated measures/longitudinal data.
+    ///
+    /// Supports lme4-style syntax with random effects:
+    /// - `~ group + (1 | subject)` - fixed effect of group, random intercept per subject
+    /// - `~ group + time + (1 | subject)` - fixed effects with random intercept
+    ///
+    /// Note: Currently only random intercepts are supported. Random slopes
+    /// will be supported in a future release.
+    pub fn model_lmm(mut self, formula: &str) -> Self {
+        self.steps.push(PipelineStep::ModelLMM {
+            formula: formula.to_string(),
+        });
+        self
+    }
+
     /// Add negative binomial GLM.
     ///
     /// Fits a negative binomial model directly to count data.
@@ -472,6 +490,7 @@ struct PipelineState {
     design: Option<DesignMatrix>,
     formula_str: Option<String>,
     lm_fit: Option<crate::model::LmFit>,
+    lmm_fit: Option<crate::model::LmmFit>,
     nb_fit: Option<crate::model::NbFit>,
     zinb_fit: Option<crate::model::ZinbFit>,
     wald_result: Option<crate::test::WaldResult>,
@@ -490,6 +509,7 @@ impl PipelineState {
             design: None,
             formula_str: None,
             lm_fit: None,
+            lmm_fit: None,
             nb_fit: None,
             zinb_fit: None,
             wald_result: None,
@@ -659,6 +679,28 @@ impl PipelineState {
                 self.lm_fit = Some(model_lm(transformed, design)?);
             }
 
+            PipelineStep::ModelLMM { formula } => {
+                // Parse mixed formula and build design matrices
+                let mixed_formula = MixedFormula::parse(formula)?;
+                self.design = Some(DesignMatrix::from_formula(&self.metadata, &mixed_formula.fixed)?);
+                self.formula_str = Some(formula.clone());
+
+                let transformed = self.transformed.as_ref().ok_or_else(|| {
+                    DaaError::Pipeline("Must normalize before fitting LMM".to_string())
+                })?;
+
+                // Fit LMM
+                self.lmm_fit = Some(fit_lmm_from_formula(
+                    transformed,
+                    &self.metadata,
+                    formula,
+                    None,
+                )?);
+
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             PipelineStep::ModelNB { formula } => {
                 let parsed_formula = Formula::parse(formula)?;
                 self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
@@ -683,9 +725,11 @@ impl PipelineState {
 
             // === Testing ===
             PipelineStep::TestWald { coefficient } => {
-                // Check for LM fit first, then NB fit, then ZINB fit
+                // Check for LM fit first, then LMM, then NB fit, then ZINB fit
                 if let Some(fit) = self.lm_fit.as_ref() {
                     self.wald_result = Some(test_wald(fit, coefficient)?);
+                } else if let Some(fit) = self.lmm_fit.as_ref() {
+                    self.wald_result = Some(test_wald_lmm(fit, coefficient)?);
                 } else if let Some(fit) = self.nb_fit.as_ref() {
                     self.wald_result = Some(test_wald_nb(fit, coefficient)?);
                 } else if let Some(fit) = self.zinb_fit.as_ref() {
@@ -1181,5 +1225,100 @@ mod tests {
             .unwrap();
 
         assert!(results_custom.len() > 0);
+    }
+
+    fn create_longitudinal_metadata() -> Metadata {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "sample_id\tgroup\ttime\tsubject").unwrap();
+        // 4 subjects, 2 timepoints each (longitudinal design)
+        writeln!(file, "S0\tcontrol\t0\tA").unwrap();
+        writeln!(file, "S1\tcontrol\t1\tA").unwrap();
+        writeln!(file, "S2\tcontrol\t0\tB").unwrap();
+        writeln!(file, "S3\tcontrol\t1\tB").unwrap();
+        writeln!(file, "S4\ttreatment\t0\tC").unwrap();
+        writeln!(file, "S5\ttreatment\t1\tC").unwrap();
+        writeln!(file, "S6\ttreatment\t0\tD").unwrap();
+        writeln!(file, "S7\ttreatment\t1\tD").unwrap();
+        file.flush().unwrap();
+        Metadata::from_tsv(file.path()).unwrap()
+    }
+
+    fn create_longitudinal_counts() -> CountMatrix {
+        // 6 features × 8 samples (4 subjects × 2 timepoints)
+        let mut tri_mat = TriMat::new((6, 8));
+
+        // Features 0-2: present in all samples, varying by group
+        for feat in 0usize..3 {
+            for sample in 0usize..8 {
+                let is_treatment = sample >= 4;
+                let base = 100u64 + feat as u64 * 20;
+                let effect = if feat == 0 { 0u64 } else { feat as u64 * 30 };
+                let value = if is_treatment {
+                    base + effect + (sample as u64 * 5)
+                } else {
+                    base + (sample as u64 * 5)
+                };
+                tri_mat.add_triplet(feat, sample, value);
+            }
+        }
+
+        // Features 3-5: present in 50% of samples
+        for feat in 3usize..6 {
+            for sample in 0usize..4 {
+                tri_mat.add_triplet(feat, sample, 50 + (feat as u64 * 10));
+            }
+        }
+
+        let feature_ids: Vec<String> = (0..6).map(|i| format!("feat_{}", i)).collect();
+        let sample_ids: Vec<String> = (0..8).map(|i| format!("S{}", i)).collect();
+        CountMatrix::new(tri_mat.to_csr(), feature_ids, sample_ids).unwrap()
+    }
+
+    #[test]
+    fn test_pipeline_with_lmm() {
+        let counts = create_longitudinal_counts();
+        let metadata = create_longitudinal_metadata();
+
+        // LMM pipeline with random intercept per subject
+        let results = Pipeline::new()
+            .name("test-lmm")
+            .filter_prevalence(0.3)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lmm("~ group + (1 | subject)")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        // Should have results for filtered features
+        assert!(results.len() > 0);
+        assert_eq!(results.method, "test-lmm");
+
+        // Check that results have valid values
+        for r in results.iter() {
+            assert!(r.p_value >= 0.0 && r.p_value <= 1.0);
+            assert!(r.q_value >= 0.0 && r.q_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_lmm_config_serialization() {
+        let pipeline = Pipeline::new()
+            .name("lmm-pipeline")
+            .filter_prevalence(0.1)
+            .add_pseudocount(1.0)
+            .normalize_clr()
+            .model_lmm("~ group + time + (1 | subject)")
+            .test_wald("grouptreatment")
+            .correct_bh();
+
+        let config = pipeline.to_config(Some("LMM pipeline for longitudinal data"));
+        let yaml = config.to_yaml().unwrap();
+
+        // Verify it can be parsed back
+        let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
+        assert_eq!(parsed.name, "lmm-pipeline");
+        assert_eq!(parsed.steps.len(), 6);
     }
 }

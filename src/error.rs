@@ -50,6 +50,9 @@ pub enum DaaError {
 
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Feature not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// Result type alias for library operations.

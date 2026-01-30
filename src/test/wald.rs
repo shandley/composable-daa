@@ -1,7 +1,7 @@
 //! Wald test for coefficient significance.
 
 use crate::error::{DaaError, Result};
-use crate::model::{LmFit, NbFit, ZinbFit};
+use crate::model::{LmFit, LmmFit, NbFit, ZinbFit};
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 
@@ -240,6 +240,71 @@ pub fn test_wald_zinb(fit: &ZinbFit, coefficient: &str) -> Result<WaldResult> {
             // Calculate two-sided p-value using normal distribution
             let p_value = if !statistic.is_nan() {
                 2.0 * (1.0 - normal.cdf(statistic.abs()))
+            } else {
+                f64::NAN
+            };
+
+            WaldResultSingle {
+                feature_id: f.feature_id.clone(),
+                coefficient: coefficient.to_string(),
+                estimate,
+                std_error,
+                statistic,
+                p_value,
+                df,
+            }
+        })
+        .collect();
+
+    Ok(WaldResult {
+        results,
+        coefficient: coefficient.to_string(),
+    })
+}
+
+/// Perform Wald test on LMM fixed effect coefficients.
+///
+/// Tests H0: β = 0 vs H1: β ≠ 0 using the t-distribution.
+/// For LMMs, the Wald statistic t = β / SE(β) is compared to a t-distribution
+/// with approximate residual degrees of freedom.
+///
+/// Note: This uses an approximate degrees of freedom based on residual df.
+/// For more accurate inference, Satterthwaite or Kenward-Roger approximations
+/// should be used (future extension).
+///
+/// # Arguments
+/// * `fit` - LMM fit results
+/// * `coefficient` - Name of fixed effect coefficient to test
+///
+/// # Returns
+/// WaldResult containing test statistics and p-values for all features.
+pub fn test_wald_lmm(fit: &LmmFit, coefficient: &str) -> Result<WaldResult> {
+    let coef_idx = fit.coefficient_index(coefficient).ok_or_else(|| {
+        DaaError::InvalidParameter(format!(
+            "Coefficient '{}' not found. Available: {:?}",
+            coefficient, fit.coefficient_names
+        ))
+    })?;
+
+    let results: Vec<WaldResultSingle> = fit
+        .fits
+        .iter()
+        .map(|f| {
+            let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let df = f.df_residual as usize;
+
+            // Calculate t-statistic
+            let statistic = if std_error > 0.0 && !std_error.is_nan() {
+                estimate / std_error
+            } else {
+                f64::NAN
+            };
+
+            // Calculate two-sided p-value using t-distribution
+            let p_value = if !statistic.is_nan() && df > 0 {
+                let t_dist = StudentsT::new(0.0, 1.0, df as f64).unwrap();
+                2.0 * (1.0 - t_dist.cdf(statistic.abs()))
             } else {
                 f64::NAN
             };
