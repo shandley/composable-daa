@@ -2,6 +2,7 @@
 
 pub mod bb;
 pub mod compare;
+pub mod hurdle;
 pub mod lm;
 pub mod lmm;
 pub mod nb;
@@ -22,3 +23,4 @@ pub use shrink::{
 };
 pub use zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit, ZinbFitSingle};
 pub use bb::{model_bb, model_bb_with_config, BbConfig, BbFit, BbFitSingle, DispersionMethod};
+pub use hurdle::{model_hurdle, model_hurdle_with_config, CountModel, HurdleConfig, HurdleFit, HurdleFitSingle};

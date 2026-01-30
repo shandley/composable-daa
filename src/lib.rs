@@ -89,6 +89,7 @@ pub mod prelude {
     };
     pub use crate::model::zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit};
     pub use crate::model::bb::{model_bb, model_bb_with_config, BbConfig, BbFit, DispersionMethod};
+    pub use crate::model::hurdle::{model_hurdle, model_hurdle_with_config, CountModel, HurdleConfig, HurdleFit};
     pub use crate::normalize::alr::{
         norm_alr, norm_alr_default, norm_alr_with_pseudocount, AlrMatrix, ReferenceSelection,
     };
@@ -117,7 +118,7 @@ pub mod prelude {
         test_permutation, test_permutation_quick, PermutationConfig, PermutationResult,
         PermutationResults,
     };
-    pub use crate::test::wald::{test_wald, test_wald_bb, test_wald_lmm, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult};
+    pub use crate::test::wald::{test_wald, test_wald_bb, test_wald_hurdle_binary, test_wald_hurdle_count, test_wald_lmm, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult};
     pub use crate::zero::pseudocount::add_pseudocount;
     pub use crate::spike::{
         AbundanceLevel, SpikeDiagnostics, SpikeEvaluation, SpikeMode, SpikeSelection,

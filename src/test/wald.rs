@@ -1,7 +1,7 @@
 //! Wald test for coefficient significance.
 
 use crate::error::{DaaError, Result};
-use crate::model::{BbFit, LmFit, LmmFit, NbFit, ZinbFit};
+use crate::model::{BbFit, HurdleFit, LmFit, LmmFit, NbFit, ZinbFit};
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 
@@ -375,6 +375,128 @@ pub fn test_wald_bb(fit: &BbFit, coefficient: &str) -> Result<WaldResult> {
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let df = f.df_residual as f64;
+
+            // Calculate z-statistic
+            let statistic = if std_error > 0.0 && !std_error.is_nan() {
+                estimate / std_error
+            } else {
+                f64::NAN
+            };
+
+            // Calculate two-sided p-value using normal distribution
+            let p_value = if !statistic.is_nan() {
+                2.0 * (1.0 - normal.cdf(statistic.abs()))
+            } else {
+                f64::NAN
+            };
+
+            WaldResultSingle {
+                feature_id: f.feature_id.clone(),
+                coefficient: coefficient.to_string(),
+                estimate,
+                std_error,
+                statistic,
+                p_value,
+                df,
+            }
+        })
+        .collect();
+
+    Ok(WaldResult {
+        results,
+        coefficient: coefficient.to_string(),
+    })
+}
+
+/// Perform Wald test on hurdle model count coefficients.
+///
+/// Tests H0: β = 0 vs H1: β ≠ 0 using the normal distribution (z-test).
+/// This tests coefficients from the count component (truncated NB) of the hurdle model.
+///
+/// # Arguments
+/// * `fit` - Hurdle model fit results
+/// * `coefficient` - Name of count coefficient to test
+///
+/// # Returns
+/// WaldResult containing test statistics and p-values for all features.
+pub fn test_wald_hurdle_count(fit: &HurdleFit, coefficient: &str) -> Result<WaldResult> {
+    let coef_idx = fit.count_coefficient_index(coefficient).ok_or_else(|| {
+        DaaError::InvalidParameter(format!(
+            "Count coefficient '{}' not found. Available: {:?}",
+            coefficient, fit.count_coefficient_names
+        ))
+    })?;
+
+    let normal = Normal::new(0.0, 1.0).unwrap();
+
+    let results: Vec<WaldResultSingle> = fit
+        .fits
+        .iter()
+        .map(|f| {
+            let estimate = f.count_coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let std_error = f.count_std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let df = f.df_residual as f64;
+
+            // Calculate z-statistic
+            let statistic = if std_error > 0.0 && !std_error.is_nan() {
+                estimate / std_error
+            } else {
+                f64::NAN
+            };
+
+            // Calculate two-sided p-value using normal distribution
+            let p_value = if !statistic.is_nan() {
+                2.0 * (1.0 - normal.cdf(statistic.abs()))
+            } else {
+                f64::NAN
+            };
+
+            WaldResultSingle {
+                feature_id: f.feature_id.clone(),
+                coefficient: coefficient.to_string(),
+                estimate,
+                std_error,
+                statistic,
+                p_value,
+                df,
+            }
+        })
+        .collect();
+
+    Ok(WaldResult {
+        results,
+        coefficient: coefficient.to_string(),
+    })
+}
+
+/// Perform Wald test on hurdle model binary coefficients.
+///
+/// Tests H0: β = 0 vs H1: β ≠ 0 using the normal distribution (z-test).
+/// This tests coefficients from the binary component (logistic) of the hurdle model.
+///
+/// # Arguments
+/// * `fit` - Hurdle model fit results
+/// * `coefficient` - Name of binary coefficient to test
+///
+/// # Returns
+/// WaldResult containing test statistics and p-values for all features.
+pub fn test_wald_hurdle_binary(fit: &HurdleFit, coefficient: &str) -> Result<WaldResult> {
+    let coef_idx = fit.binary_coefficient_index(coefficient).ok_or_else(|| {
+        DaaError::InvalidParameter(format!(
+            "Binary coefficient '{}' not found. Available: {:?}",
+            coefficient, fit.binary_coefficient_names
+        ))
+    })?;
+
+    let normal = Normal::new(0.0, 1.0).unwrap();
+
+    let results: Vec<WaldResultSingle> = fit
+        .fits
+        .iter()
+        .map(|f| {
+            let estimate = f.binary_coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let std_error = f.binary_std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
             let df = f.df_residual as f64;
 
             // Calculate z-statistic

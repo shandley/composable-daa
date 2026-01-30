@@ -13,14 +13,14 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::data::{MixedFormula, RandomDesignMatrix};
-use crate::model::{fit_lmm_from_formula, model_bb, model_lm, model_nb, model_zinb};
+use crate::model::{fit_lmm_from_formula, model_bb, model_hurdle, model_lm, model_nb, model_zinb};
 use crate::normalize::{
     norm_alr, norm_clr, norm_css, norm_css_with_config, norm_tmm, norm_tss,
     CssConfig, ReferenceSelection, TransformedMatrix,
 };
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::{
-    test_permutation, test_wald, test_wald_bb, test_wald_lmm, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
+    test_permutation, test_wald, test_wald_bb, test_wald_hurdle_count, test_wald_lmm, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
 };
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,8 @@ pub enum PipelineStep {
     ModelZINB { formula: String },
     /// Fit beta-binomial GLM (for proportions with overdispersion).
     ModelBB { formula: String },
+    /// Fit hurdle model (two-part model for zero-inflated counts).
+    ModelHurdle { formula: String },
 
     // === Testing ===
     /// Wald test for a coefficient.
@@ -442,6 +444,24 @@ impl Pipeline {
         self
     }
 
+    /// Add hurdle model.
+    ///
+    /// Fits a two-part model for zero-inflated count data:
+    /// - Binary part: Logistic regression for P(Y > 0)
+    /// - Count part: Truncated negative binomial for Y | Y > 0
+    ///
+    /// Unlike ZINB which models zeros as a mixture (structural + sampling),
+    /// hurdle models treat ALL zeros as coming from the binary process.
+    /// Use this when zeros represent true absence rather than under-detection.
+    ///
+    /// Does not require normalization (works on raw counts).
+    pub fn model_hurdle(mut self, formula: &str) -> Self {
+        self.steps.push(PipelineStep::ModelHurdle {
+            formula: formula.to_string(),
+        });
+        self
+    }
+
     /// Add Wald test.
     pub fn test_wald(mut self, coefficient: &str) -> Self {
         self.steps.push(PipelineStep::TestWald {
@@ -509,6 +529,7 @@ struct PipelineState {
     nb_fit: Option<crate::model::NbFit>,
     zinb_fit: Option<crate::model::ZinbFit>,
     bb_fit: Option<crate::model::BbFit>,
+    hurdle_fit: Option<crate::model::HurdleFit>,
     wald_result: Option<crate::test::WaldResult>,
     permutation_result: Option<PermutationResults>,
     bh_corrected: Option<crate::correct::bh::BhCorrected>,
@@ -529,6 +550,7 @@ impl PipelineState {
             nb_fit: None,
             zinb_fit: None,
             bb_fit: None,
+            hurdle_fit: None,
             wald_result: None,
             permutation_result: None,
             bh_corrected: None,
@@ -751,9 +773,20 @@ impl PipelineState {
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
 
+            PipelineStep::ModelHurdle { formula } => {
+                let parsed_formula = Formula::parse(formula)?;
+                self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                self.formula_str = Some(formula.clone());
+                let design = self.design.as_ref().unwrap();
+                // Hurdle model works directly on counts (no normalization needed)
+                self.hurdle_fit = Some(model_hurdle(&self.counts, design)?);
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             // === Testing ===
             PipelineStep::TestWald { coefficient } => {
-                // Check for LM fit first, then LMM, then NB fit, then ZINB fit, then BB fit
+                // Check for LM fit first, then LMM, then NB fit, then ZINB fit, then BB fit, then Hurdle fit
                 if let Some(fit) = self.lm_fit.as_ref() {
                     self.wald_result = Some(test_wald(fit, coefficient)?);
                 } else if let Some(fit) = self.lmm_fit.as_ref() {
@@ -764,6 +797,9 @@ impl PipelineState {
                     self.wald_result = Some(test_wald_zinb(fit, coefficient)?);
                 } else if let Some(fit) = self.bb_fit.as_ref() {
                     self.wald_result = Some(test_wald_bb(fit, coefficient)?);
+                } else if let Some(fit) = self.hurdle_fit.as_ref() {
+                    // For hurdle, test the count component by default
+                    self.wald_result = Some(test_wald_hurdle_count(fit, coefficient)?);
                 } else {
                     return Err(DaaError::Pipeline(
                         "Must fit model before Wald test".to_string(),
@@ -1393,6 +1429,50 @@ mod tests {
         // Verify it can be parsed back
         let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
         assert_eq!(parsed.name, "bb-pipeline");
+        assert_eq!(parsed.steps.len(), 4);
+    }
+
+    #[test]
+    fn test_pipeline_with_hurdle() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        // Hurdle pipeline (two-part model for zero-inflated data)
+        let results = Pipeline::new()
+            .name("test-hurdle")
+            .filter_prevalence(0.3)
+            .model_hurdle("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        // Should have results for filtered features
+        assert!(results.len() > 0);
+        assert_eq!(results.method, "test-hurdle");
+
+        // Check that results have valid values
+        for r in results.iter() {
+            assert!(r.p_value >= 0.0 && r.p_value <= 1.0);
+            assert!(r.q_value >= 0.0 && r.q_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_hurdle_config_serialization() {
+        let pipeline = Pipeline::new()
+            .name("hurdle-pipeline")
+            .filter_prevalence(0.1)
+            .model_hurdle("~ group")
+            .test_wald("grouptreatment")
+            .correct_bh();
+
+        let config = pipeline.to_config(Some("Hurdle pipeline for zero-inflated counts"));
+        let yaml = config.to_yaml().unwrap();
+
+        // Verify it can be parsed back
+        let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
+        assert_eq!(parsed.name, "hurdle-pipeline");
         assert_eq!(parsed.steps.len(), 4);
     }
 }

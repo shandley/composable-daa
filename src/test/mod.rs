@@ -9,4 +9,4 @@ pub use permutation::{
     test_permutation, test_permutation_quick, PermutationConfig, PermutationResult,
     PermutationResults,
 };
-pub use wald::{test_wald, test_wald_bb, test_wald_lmm, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult, WaldResultSingle};
+pub use wald::{test_wald, test_wald_bb, test_wald_hurdle_binary, test_wald_hurdle_count, test_wald_lmm, test_wald_nb, test_wald_zinb, test_wald_zinb_zi, WaldResult, WaldResultSingle};
