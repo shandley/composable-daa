@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use composable_daa::data::{CountMatrix, Metadata};
 use composable_daa::error::Result;
 use composable_daa::pipeline::{Pipeline, PipelineConfig};
-use composable_daa::benchmark::{generate_synthetic, SyntheticConfig};
+use composable_daa::benchmark::{
+    generate_synthetic, SyntheticConfig,
+    fetch_dataset, list_datasets, clear_cache, BenchmarkDataset,
+};
 use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity, profile_for_llm};
 use composable_daa::spike::{
     evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection,
@@ -328,6 +331,25 @@ enum Commands {
         #[arg(long)]
         n_samples: Option<usize>,
     },
+
+    /// Fetch classic benchmark datasets from Zenodo
+    Fetch {
+        /// Dataset: hmp_v13, hmp_v35, hmp_subset, hmp_wms, ravel, stammler
+        #[arg(short, long)]
+        dataset: Option<String>,
+
+        /// Output directory for downloaded files
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// List available datasets
+        #[arg(long)]
+        list: bool,
+
+        /// Clear the download cache
+        #[arg(long)]
+        clear_cache: bool,
+    },
 }
 
 fn main() {
@@ -459,6 +481,13 @@ fn main() {
             n_features,
             n_samples,
         } => cmd_generate(&preset, &output, seed, n_features, n_samples),
+
+        Commands::Fetch {
+            dataset,
+            output,
+            list,
+            clear_cache: clear,
+        } => cmd_fetch(dataset.as_deref(), output.as_ref(), list, clear),
     };
 
     if let Err(e) = result {
@@ -1158,6 +1187,98 @@ fn cmd_generate(
     eprintln!("  metadata.tsv     - Sample metadata");
     eprintln!("  ground_truth.tsv - True differential features");
     eprintln!("  config.yaml      - Generation config");
+
+    Ok(())
+}
+
+/// Fetch classic benchmark datasets from Zenodo
+fn cmd_fetch(
+    dataset: Option<&str>,
+    output: Option<&PathBuf>,
+    list: bool,
+    clear: bool,
+) -> Result<()> {
+    // Handle cache clearing
+    if clear {
+        eprintln!("Clearing dataset cache...");
+        clear_cache(None)?;
+        eprintln!("Cache cleared.");
+        return Ok(());
+    }
+
+    // Handle listing
+    if list || dataset.is_none() {
+        eprintln!("Available benchmark datasets:\n");
+        eprintln!("  {:<15} {:<50} {}", "ID", "Description", "Cached");
+        eprintln!("  {}", "-".repeat(75));
+
+        for info in list_datasets(None) {
+            let cached = if info.cached { "yes" } else { "no" };
+            eprintln!(
+                "  {:<15} {:<50} {}",
+                match info.dataset {
+                    BenchmarkDataset::HmpGingivalV13 => "hmp_v13",
+                    BenchmarkDataset::HmpGingivalV35 => "hmp_v35",
+                    BenchmarkDataset::HmpGingivalV35Subset => "hmp_subset",
+                    BenchmarkDataset::HmpGingivalWms => "hmp_wms",
+                    BenchmarkDataset::RavelBv => "ravel",
+                    BenchmarkDataset::StammlerSpikein => "stammler",
+                },
+                info.dataset.description(),
+                cached
+            );
+        }
+
+        eprintln!();
+        eprintln!("Usage: daa fetch -d <dataset> [-o <output_dir>]");
+        eprintln!();
+        eprintln!("Note: stammler has experimental spike-in ground truth!");
+        return Ok(());
+    }
+
+    // Fetch the requested dataset
+    let ds_name = dataset.unwrap();
+    let ds = BenchmarkDataset::from_str(ds_name).ok_or_else(|| {
+        composable_daa::error::DaaError::InvalidParameter(format!(
+            "Unknown dataset: {}. Run 'daa fetch --list' to see available datasets.",
+            ds_name
+        ))
+    })?;
+
+    eprintln!("Fetching dataset: {}", ds.name());
+    let fetched = fetch_dataset(ds, None)?;
+
+    eprintln!("Loaded: {} features x {} samples",
+        fetched.counts.n_features(),
+        fetched.counts.n_samples()
+    );
+
+    // Copy to output directory if specified
+    if let Some(out_dir) = output {
+        std::fs::create_dir_all(out_dir)?;
+
+        let counts_dest = out_dir.join("counts.tsv");
+        let metadata_dest = out_dir.join("metadata.tsv");
+
+        fetched.counts.to_tsv(&counts_dest)?;
+        // Copy metadata from cache
+        let metadata_src = fetched.cache_dir.join(format!("{}_sample_metadata.tsv", ds.name()));
+        std::fs::copy(&metadata_src, &metadata_dest)?;
+
+        eprintln!();
+        eprintln!("Files copied to {:?}:", out_dir);
+        eprintln!("  counts.tsv   - Count matrix");
+        eprintln!("  metadata.tsv - Sample metadata");
+    } else {
+        eprintln!();
+        eprintln!("Files cached at: {:?}", fetched.cache_dir);
+        eprintln!("Use -o <dir> to copy to a specific location.");
+    }
+
+    if ds.has_ground_truth() {
+        eprintln!();
+        eprintln!("This dataset has experimental spike-in controls!");
+    }
 
     Ok(())
 }

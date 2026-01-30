@@ -55,6 +55,8 @@ pub mod zero;
 pub mod prelude {
     pub use crate::benchmark::{
         generate_synthetic, Direction, EffectType, GroundTruth, SyntheticConfig, SyntheticData,
+        // Dataset fetching
+        fetch_dataset, list_datasets, clear_cache, BenchmarkDataset, DatasetInfo, FetchedDataset,
     };
     pub use crate::correct::bh::correct_bh;
     pub use crate::data::{
