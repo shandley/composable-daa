@@ -87,14 +87,20 @@ for result in results.significant() {
 - **Spike-in** - Absolute abundance via experimental spike-ins
 
 ### Models
-- **Linear model** - For CLR-transformed data
-- **Negative binomial GLM** - For raw counts with overdispersion
-- **Zero-inflated NB** - For excess zeros beyond NB expectation
+- **Linear model (LM)** - For CLR-transformed data
+- **Linear mixed model (LMM)** - For longitudinal/repeated measures with random effects
+- **Negative binomial GLM (NB)** - For raw counts with overdispersion
+- **Zero-inflated NB (ZINB)** - For excess zeros beyond NB expectation
+- **Beta-binomial (BB)** - For proportions with overdispersion
+- **Hurdle model** - Two-part model for sparse counts (logistic + truncated NB)
 
 ### Testing
-- **Wald test** - Coefficient significance
-- **Likelihood ratio test** - Nested model comparison
+- **Wald test** - Coefficient significance (all model types)
+- **Likelihood ratio test (LRT)** - Nested model comparison (NB, ZINB, Hurdle)
 - **Permutation test** - Distribution-free, non-parametric
+
+### Effect Size Shrinkage
+- **Empirical Bayes shrinkage** - Stabilize noisy estimates (LM, NB, ZINB, BB, Hurdle)
 
 ### Multiple Testing
 - **Benjamini-Hochberg** - FDR control
@@ -128,6 +134,10 @@ daa validate -c counts.tsv -m metadata.tsv -g group -t treatment \
 | `profile` | Analyze data characteristics (sparsity, prevalence, library size) |
 | `profile-llm` | Generate AI-friendly data profile for pipeline recommendations |
 | `linda` | Run LinDA-style analysis (CLR + LM + Wald) |
+| `nb` | Run negative binomial GLM analysis |
+| `zinb` | Run zero-inflated negative binomial analysis |
+| `bb` | Run beta-binomial analysis for proportions |
+| `hurdle` | Run hurdle model analysis for sparse counts |
 | `permutation` | Run analysis with permutation tests |
 | `run` | Execute pipeline from YAML configuration |
 | `validate` | Spike-in validation to measure pipeline performance |
@@ -166,7 +176,7 @@ cargo test           # Run all tests
 cargo test --lib     # Library tests only
 ```
 
-279 tests covering all components.
+368 tests covering all components.
 
 ## License
 
@@ -181,7 +191,7 @@ If you use this software, please cite:
   title = {composable-daa: Composable Differential Abundance Analysis},
   author = {Handley, Scott},
   year = {2025},
-  url = {https://github.com/[username]/composable-daa}
+  url = {https://github.com/shandley/composable-daa}
 }
 ```
 
