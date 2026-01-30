@@ -20,8 +20,8 @@ pub struct WaldResultSingle {
     pub statistic: f64,
     /// P-value (two-sided).
     pub p_value: f64,
-    /// Degrees of freedom.
-    pub df: usize,
+    /// Degrees of freedom (f64 for Satterthwaite precision).
+    pub df: f64,
 }
 
 /// Results of Wald tests for all features.
@@ -96,7 +96,7 @@ pub fn test_wald(fit: &LmFit, coefficient: &str) -> Result<WaldResult> {
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual;
+            let df = f.df_residual as f64;
 
             // Calculate t-statistic
             let statistic = if std_error > 0.0 && !std_error.is_nan() {
@@ -106,8 +106,8 @@ pub fn test_wald(fit: &LmFit, coefficient: &str) -> Result<WaldResult> {
             };
 
             // Calculate two-sided p-value
-            let p_value = if !statistic.is_nan() && df > 0 {
-                let t_dist = StudentsT::new(0.0, 1.0, df as f64).unwrap();
+            let p_value = if !statistic.is_nan() && df > 0.0 {
+                let t_dist = StudentsT::new(0.0, 1.0, df).unwrap();
                 2.0 * (1.0 - t_dist.cdf(statistic.abs()))
             } else {
                 f64::NAN
@@ -167,7 +167,7 @@ pub fn test_wald_nb(fit: &NbFit, coefficient: &str) -> Result<WaldResult> {
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual;
+            let df = f.df_residual as f64;
 
             // Calculate z-statistic
             let statistic = if std_error > 0.0 && !std_error.is_nan() {
@@ -228,7 +228,7 @@ pub fn test_wald_zinb(fit: &ZinbFit, coefficient: &str) -> Result<WaldResult> {
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual;
+            let df = f.df_residual as f64;
 
             // Calculate z-statistic
             let statistic = if std_error > 0.0 && !std_error.is_nan() {
@@ -266,11 +266,11 @@ pub fn test_wald_zinb(fit: &ZinbFit, coefficient: &str) -> Result<WaldResult> {
 ///
 /// Tests H0: β = 0 vs H1: β ≠ 0 using the t-distribution.
 /// For LMMs, the Wald statistic t = β / SE(β) is compared to a t-distribution
-/// with approximate residual degrees of freedom.
+/// with degrees of freedom determined by the df_method used during fitting.
 ///
-/// Note: This uses an approximate degrees of freedom based on residual df.
-/// For more accurate inference, Satterthwaite or Kenward-Roger approximations
-/// should be used (future extension).
+/// If the LMM was fit with `DfMethod::Satterthwaite`, this uses the coefficient-specific
+/// Satterthwaite degrees of freedom which account for uncertainty in variance component
+/// estimates. Otherwise, it uses the naive residual df (n - p).
 ///
 /// # Arguments
 /// * `fit` - LMM fit results
@@ -292,7 +292,13 @@ pub fn test_wald_lmm(fit: &LmmFit, coefficient: &str) -> Result<WaldResult> {
         .map(|f| {
             let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual as usize;
+
+            // Use Satterthwaite df if available, otherwise fall back to residual df
+            let df = if let Some(ref satt_df) = f.df_satterthwaite {
+                satt_df.get(coef_idx).copied().unwrap_or(f.df_residual)
+            } else {
+                f.df_residual
+            };
 
             // Calculate t-statistic
             let statistic = if std_error > 0.0 && !std_error.is_nan() {
@@ -302,8 +308,8 @@ pub fn test_wald_lmm(fit: &LmmFit, coefficient: &str) -> Result<WaldResult> {
             };
 
             // Calculate two-sided p-value using t-distribution
-            let p_value = if !statistic.is_nan() && df > 0 {
-                let t_dist = StudentsT::new(0.0, 1.0, df as f64).unwrap();
+            let p_value = if !statistic.is_nan() && df > 0.0 {
+                let t_dist = StudentsT::new(0.0, 1.0, df).unwrap();
                 2.0 * (1.0 - t_dist.cdf(statistic.abs()))
             } else {
                 f64::NAN
@@ -354,7 +360,7 @@ pub fn test_wald_zinb_zi(fit: &ZinbFit, coefficient: &str) -> Result<WaldResult>
         .map(|f| {
             let estimate = f.zi_coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
             let std_error = f.zi_std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual;
+            let df = f.df_residual as f64;
 
             // Calculate z-statistic
             let statistic = if std_error > 0.0 && !std_error.is_nan() {

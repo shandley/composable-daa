@@ -81,7 +81,7 @@ pub mod prelude {
         ModelCriteria, SelectionCriterion,
     };
     pub use crate::model::lm::{model_lm, LmFit};
-    pub use crate::model::lmm::{fit_lmm_from_formula, model_lmm, LmmConfig, LmmFit};
+    pub use crate::model::lmm::{fit_lmm_from_formula, model_lmm, DfMethod, LmmConfig, LmmFit};
     pub use crate::model::nb::{model_nb, NbFit};
     pub use crate::model::shrink::{
         shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
