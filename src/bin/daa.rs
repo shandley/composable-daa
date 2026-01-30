@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use composable_daa::data::{CountMatrix, Metadata};
 use composable_daa::error::Result;
 use composable_daa::pipeline::{Pipeline, PipelineConfig};
+use composable_daa::benchmark::{generate_synthetic, SyntheticConfig};
 use composable_daa::profile::{profile_library_size, profile_prevalence, profile_sparsity, profile_for_llm};
 use composable_daa::spike::{
     evaluate_spikes, spike_abundance_with_mode, SpikeMode, SpikeSelection,
@@ -304,6 +305,29 @@ enum Commands {
         #[arg(long, default_value = "yaml")]
         format: String,
     },
+
+    /// Generate synthetic benchmark data with known ground truth
+    Generate {
+        /// Preset: ideal, typical_16s, sparse_virome, extreme_sparse, group_specific, confounded, small_n
+        #[arg(short, long, default_value = "typical_16s")]
+        preset: String,
+
+        /// Output directory for generated files
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Random seed for reproducibility
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
+        /// Number of features (overrides preset)
+        #[arg(long)]
+        n_features: Option<usize>,
+
+        /// Number of samples per group (overrides preset)
+        #[arg(long)]
+        n_samples: Option<usize>,
+    },
 }
 
 fn main() {
@@ -427,6 +451,14 @@ fn main() {
             output,
             format,
         } => cmd_profile_llm(&counts, &metadata, &group, output.as_ref(), &format),
+
+        Commands::Generate {
+            preset,
+            output,
+            seed,
+            n_features,
+            n_samples,
+        } => cmd_generate(&preset, &output, seed, n_features, n_samples),
     };
 
     if let Err(e) = result {
@@ -1051,6 +1083,81 @@ fn cmd_profile_llm(
             println!("{}", output);
         }
     }
+
+    Ok(())
+}
+
+/// Generate synthetic benchmark data
+fn cmd_generate(
+    preset: &str,
+    output_dir: &PathBuf,
+    seed: u64,
+    n_features: Option<usize>,
+    n_samples: Option<usize>,
+) -> Result<()> {
+    // Select preset config
+    let mut config = match preset.to_lowercase().as_str() {
+        "ideal" => SyntheticConfig::ideal(),
+        "typical_16s" | "typical" => SyntheticConfig::typical_16s(),
+        "sparse_virome" | "virome" | "sparse" => SyntheticConfig::sparse_virome(),
+        "extreme_sparse" | "extreme" => SyntheticConfig::extreme_sparse(),
+        "group_specific" | "groupspec" => SyntheticConfig::group_specific(),
+        "confounded" => SyntheticConfig::confounded(),
+        "small_n" | "small" => SyntheticConfig::small_n(),
+        _ => {
+            eprintln!("Unknown preset '{}'. Available: ideal, typical_16s, sparse_virome, extreme_sparse, group_specific, confounded, small_n", preset);
+            return Err(composable_daa::error::DaaError::InvalidParameter(
+                format!("Unknown preset: {}", preset)
+            ));
+        }
+    };
+
+    // Apply overrides
+    config.seed = seed;
+    if let Some(n) = n_features {
+        config.n_features = n;
+    }
+    if let Some(n) = n_samples {
+        config.n_samples_per_group = n;
+    }
+
+    eprintln!("Generating synthetic data...");
+    eprintln!("  Preset: {}", config.name);
+    eprintln!("  Features: {}", config.n_features);
+    eprintln!("  Samples per group: {}", config.n_samples_per_group);
+    eprintln!("  Target sparsity: {:.0}%", config.sparsity * 100.0);
+    eprintln!("  Differential features: {}", config.n_differential);
+    eprintln!("  Effect size: {:.1} log2FC", config.effect_size);
+    eprintln!("  Seed: {}", config.seed);
+
+    let data = generate_synthetic(&config)?;
+
+    // Calculate actual sparsity
+    let mut zeros = 0;
+    let total = data.counts.n_features() * data.counts.n_samples();
+    for f in 0..data.counts.n_features() {
+        for s in 0..data.counts.n_samples() {
+            if data.counts.get(f, s) == 0 {
+                zeros += 1;
+            }
+        }
+    }
+    let actual_sparsity = zeros as f64 / total as f64;
+
+    eprintln!();
+    eprintln!("Generated:");
+    eprintln!("  Actual sparsity: {:.1}%", actual_sparsity * 100.0);
+    eprintln!("  Differential features: {}", data.ground_truth.differential_features.len());
+
+    // Write files
+    data.write_to_dir(output_dir)?;
+
+    eprintln!();
+    eprintln!("Files written to {:?}:", output_dir);
+    eprintln!("  counts.tsv       - Count matrix");
+    eprintln!("  metadata.tsv     - Sample metadata");
+    eprintln!("  ground_truth.tsv - True differential features");
+    eprintln!("  config.yaml      - Generation config");
 
     Ok(())
 }

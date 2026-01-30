@@ -38,6 +38,7 @@
 //!     .unwrap();
 //! ```
 
+pub mod benchmark;
 pub mod correct;
 pub mod data;
 pub mod error;
@@ -52,6 +53,9 @@ pub mod zero;
 
 /// Convenient re-exports for common usage.
 pub mod prelude {
+    pub use crate::benchmark::{
+        generate_synthetic, Direction, EffectType, GroundTruth, SyntheticConfig, SyntheticData,
+    };
     pub use crate::correct::bh::correct_bh;
     pub use crate::data::{
         Confidence, CountMatrix, DaResult, DaResultSet, DesignMatrix, Formula, Metadata,
