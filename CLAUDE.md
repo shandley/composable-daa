@@ -148,7 +148,7 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (360 tests passing)
+## Current Status (368 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
@@ -177,15 +177,12 @@ Pipeline::new()
   - Models Y/n as BetaBinomial(n, α, β)
   - Mean-dispersion parameterization: μ = α/(α+β), ρ = 1/(α+β+1)
   - IRLS fitting with method-of-moments or profile ML dispersion
-  - Useful for modeling feature counts as proportions of library size
+  - Effect size shrinkage via `shrink_lfc_bb()`
 - Hurdle model for sparse count data
   - Two-part model: binary component (logistic) + count component (truncated NB)
   - All zeros come from binary process (vs ZINB's mixture)
   - Separate Wald tests for binary and count components
-  - Supports Poisson or NB for count component
-
-### Future Work
-- Shrinkage for BB/hurdle effect sizes
+  - Effect size shrinkage for both components via `shrink_lfc_hurdle()`
 
 ## Build and Test
 

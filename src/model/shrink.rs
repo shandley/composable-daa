@@ -7,6 +7,8 @@
 //! This is similar to DESeq2's `lfcShrink` function and improves
 //! interpretability for sparse/low-count data.
 
+use crate::model::bb::BbFit;
+use crate::model::hurdle::HurdleFit;
 use crate::model::nb::NbFit;
 use crate::model::zinb::ZinbFit;
 use crate::test::WaldResult;
@@ -303,6 +305,119 @@ pub fn shrink_lfc_zinb(
         .collect();
 
     Some(shrink_estimates(&estimates, coefficient, config))
+}
+
+/// Shrink estimates from beta-binomial model fit.
+///
+/// Beta-binomial coefficients are on the logit scale, so shrinkage
+/// pulls effect sizes toward zero (no difference in proportions).
+///
+/// # Arguments
+/// * `fit` - Beta-binomial model fit
+/// * `coefficient` - Name of coefficient to shrink
+/// * `config` - Shrinkage configuration
+pub fn shrink_lfc_bb(
+    fit: &BbFit,
+    coefficient: &str,
+    config: &ShrinkageConfig,
+) -> Option<ShrinkageResult> {
+    let coef_idx = fit.coefficient_index(coefficient)?;
+
+    let estimates: Vec<(String, f64, f64)> = fit
+        .fits
+        .iter()
+        .map(|f| {
+            let est = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
+            let se = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
+            (f.feature_id.clone(), est, se)
+        })
+        .collect();
+
+    Some(shrink_estimates(&estimates, coefficient, config))
+}
+
+/// Which component of the hurdle model to shrink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HurdleComponent {
+    /// Binary component (logistic regression for P(Y > 0)).
+    Binary,
+    /// Count component (truncated NB for E[Y | Y > 0]).
+    Count,
+}
+
+impl Default for HurdleComponent {
+    fn default() -> Self {
+        HurdleComponent::Count
+    }
+}
+
+/// Shrink estimates from hurdle model fit.
+///
+/// Hurdle models have two components:
+/// - Binary: logistic regression for P(Y > 0), coefficients on logit scale
+/// - Count: truncated NB for E[Y | Y > 0], coefficients on log scale
+///
+/// Use `component` to specify which component to shrink.
+///
+/// # Arguments
+/// * `fit` - Hurdle model fit
+/// * `coefficient` - Name of coefficient to shrink
+/// * `component` - Which component to shrink (Binary or Count)
+/// * `config` - Shrinkage configuration
+pub fn shrink_lfc_hurdle(
+    fit: &HurdleFit,
+    coefficient: &str,
+    component: HurdleComponent,
+    config: &ShrinkageConfig,
+) -> Option<ShrinkageResult> {
+    let estimates: Vec<(String, f64, f64)> = match component {
+        HurdleComponent::Binary => {
+            let coef_idx = fit.binary_coefficient_index(coefficient)?;
+            fit.fits
+                .iter()
+                .map(|f| {
+                    let est = f
+                        .binary_coefficients
+                        .get(coef_idx)
+                        .copied()
+                        .unwrap_or(f64::NAN);
+                    let se = f
+                        .binary_std_errors
+                        .get(coef_idx)
+                        .copied()
+                        .unwrap_or(f64::NAN);
+                    (f.feature_id.clone(), est, se)
+                })
+                .collect()
+        }
+        HurdleComponent::Count => {
+            let coef_idx = fit.count_coefficient_index(coefficient)?;
+            fit.fits
+                .iter()
+                .map(|f| {
+                    let est = f
+                        .count_coefficients
+                        .get(coef_idx)
+                        .copied()
+                        .unwrap_or(f64::NAN);
+                    let se = f
+                        .count_std_errors
+                        .get(coef_idx)
+                        .copied()
+                        .unwrap_or(f64::NAN);
+                    (f.feature_id.clone(), est, se)
+                })
+                .collect()
+        }
+    };
+
+    // Add component suffix to coefficient name for clarity
+    let coef_name = match component {
+        HurdleComponent::Binary => format!("{} (binary)", coefficient),
+        HurdleComponent::Count => format!("{} (count)", coefficient),
+    };
+
+    Some(shrink_estimates(&estimates, &coef_name, config))
 }
 
 /// Internal function to shrink a set of estimates.
@@ -818,5 +933,243 @@ mod tests {
                 assert!(est.s_value >= 0.0, "S-value should be non-negative");
             }
         }
+    }
+
+    // Helper to create test data for BB model (proportions)
+    fn create_bb_test_counts() -> CountMatrix {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "feature_id\t{}",
+            (1..=20).map(|i| format!("S{}", i)).collect::<Vec<_>>().join("\t")
+        )
+        .unwrap();
+
+        // Feature with no effect - similar proportions in both groups
+        // With "other" feature to balance library sizes
+        let no_effect: Vec<String> = (1..=20)
+            .map(|_| "30".to_string())
+            .collect();
+        writeln!(file, "no_effect\t{}", no_effect.join("\t")).unwrap();
+
+        // Feature with strong effect - different proportions
+        let strong: Vec<String> = (1..=20)
+            .map(|i| if i <= 10 { "10".to_string() } else { "50".to_string() })
+            .collect();
+        writeln!(file, "strong_effect\t{}", strong.join("\t")).unwrap();
+
+        // Other feature to balance library sizes
+        let other: Vec<String> = (1..=20)
+            .map(|i| if i <= 10 { "60".to_string() } else { "20".to_string() })
+            .collect();
+        writeln!(file, "other\t{}", other.join("\t")).unwrap();
+
+        file.flush().unwrap();
+        CountMatrix::from_tsv(file.path()).unwrap()
+    }
+
+    // Helper to create sparse test data for hurdle model
+    fn create_hurdle_test_counts() -> CountMatrix {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "feature_id\t{}",
+            (1..=20).map(|i| format!("S{}", i)).collect::<Vec<_>>().join("\t")
+        )
+        .unwrap();
+
+        // Feature with no effect (sparse)
+        let no_effect: Vec<String> = (1..=20)
+            .map(|i| if i % 3 == 0 { "0" } else { "50" }.to_string())
+            .collect();
+        writeln!(file, "no_effect\t{}", no_effect.join("\t")).unwrap();
+
+        // Feature with strong effect
+        let strong: Vec<String> = (1..=20)
+            .map(|i| {
+                if i <= 10 {
+                    if i % 2 == 0 { "0" } else { "10" }
+                } else {
+                    "80"
+                }
+                .to_string()
+            })
+            .collect();
+        writeln!(file, "strong_effect\t{}", strong.join("\t")).unwrap();
+
+        // Dense feature
+        let dense: Vec<String> = (1..=20)
+            .map(|i| if i <= 10 { "30".to_string() } else { "60".to_string() })
+            .collect();
+        writeln!(file, "dense\t{}", dense.join("\t")).unwrap();
+
+        file.flush().unwrap();
+        CountMatrix::from_tsv(file.path()).unwrap()
+    }
+
+    #[test]
+    fn test_shrink_lfc_bb() {
+        use crate::model::model_bb;
+
+        let metadata = create_test_metadata();
+        let counts = create_bb_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_bb(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_bb(&fit, "grouptreatment", &ShrinkageConfig::default());
+
+        assert!(shrunk.is_some());
+        let shrunk = shrunk.unwrap();
+        assert_eq!(shrunk.len(), 3);
+        assert_eq!(shrunk.coefficient, "grouptreatment");
+    }
+
+    #[test]
+    fn test_shrink_lfc_bb_invalid_coefficient() {
+        use crate::model::model_bb;
+
+        let metadata = create_test_metadata();
+        let counts = create_bb_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_bb(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_bb(&fit, "nonexistent", &ShrinkageConfig::default());
+
+        assert!(shrunk.is_none());
+    }
+
+    #[test]
+    fn test_shrink_lfc_bb_toward_zero() {
+        use crate::model::model_bb;
+
+        let metadata = create_test_metadata();
+        let counts = create_bb_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_bb(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_bb(&fit, "grouptreatment", &ShrinkageConfig::default()).unwrap();
+
+        // Shrunk estimates should be closer to zero than unshrunk
+        for est in &shrunk.estimates {
+            if est.lfc_unshrunk.is_finite() && est.se_unshrunk > 0.0 {
+                assert!(
+                    est.lfc_shrunk.abs() <= est.lfc_unshrunk.abs() + 0.001,
+                    "Shrunk LFC {} should be closer to zero than unshrunk {}",
+                    est.lfc_shrunk,
+                    est.lfc_unshrunk
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_shrink_lfc_hurdle_count() {
+        use crate::model::model_hurdle;
+
+        let metadata = create_test_metadata();
+        let counts = create_hurdle_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_hurdle(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_hurdle(
+            &fit,
+            "grouptreatment",
+            HurdleComponent::Count,
+            &ShrinkageConfig::default(),
+        );
+
+        assert!(shrunk.is_some());
+        let shrunk = shrunk.unwrap();
+        assert_eq!(shrunk.len(), 3);
+        assert!(shrunk.coefficient.contains("count"));
+    }
+
+    #[test]
+    fn test_shrink_lfc_hurdle_binary() {
+        use crate::model::model_hurdle;
+
+        let metadata = create_test_metadata();
+        let counts = create_hurdle_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_hurdle(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_hurdle(
+            &fit,
+            "grouptreatment",
+            HurdleComponent::Binary,
+            &ShrinkageConfig::default(),
+        );
+
+        assert!(shrunk.is_some());
+        let shrunk = shrunk.unwrap();
+        assert_eq!(shrunk.len(), 3);
+        assert!(shrunk.coefficient.contains("binary"));
+    }
+
+    #[test]
+    fn test_shrink_lfc_hurdle_invalid_coefficient() {
+        use crate::model::model_hurdle;
+
+        let metadata = create_test_metadata();
+        let counts = create_hurdle_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_hurdle(&counts, &design).unwrap();
+
+        // Test invalid coefficient for count component
+        let shrunk = shrink_lfc_hurdle(
+            &fit,
+            "nonexistent",
+            HurdleComponent::Count,
+            &ShrinkageConfig::default(),
+        );
+        assert!(shrunk.is_none());
+
+        // Test invalid coefficient for binary component
+        let shrunk = shrink_lfc_hurdle(
+            &fit,
+            "nonexistent",
+            HurdleComponent::Binary,
+            &ShrinkageConfig::default(),
+        );
+        assert!(shrunk.is_none());
+    }
+
+    #[test]
+    fn test_shrink_lfc_hurdle_confidence_intervals() {
+        use crate::model::model_hurdle;
+
+        let metadata = create_test_metadata();
+        let counts = create_hurdle_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let fit = model_hurdle(&counts, &design).unwrap();
+        let shrunk = shrink_lfc_hurdle(
+            &fit,
+            "grouptreatment",
+            HurdleComponent::Count,
+            &ShrinkageConfig::default(),
+        )
+        .unwrap();
+
+        for est in &shrunk.estimates {
+            if est.lfc_shrunk.is_finite() {
+                assert!(est.ci_lower < est.lfc_shrunk);
+                assert!(est.ci_upper > est.lfc_shrunk);
+                assert!(est.ci_lower < est.ci_upper);
+            }
+        }
+    }
+
+    #[test]
+    fn test_hurdle_component_default() {
+        assert_eq!(HurdleComponent::default(), HurdleComponent::Count);
     }
 }

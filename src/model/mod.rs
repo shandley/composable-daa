@@ -18,8 +18,8 @@ pub use lm::{model_lm, LmFit, LmFitSingle};
 pub use lmm::{fit_lmm_from_formula, model_lmm, DfMethod, LmmConfig, LmmFit, LmmFitSingle};
 pub use nb::{model_nb, NbFit, NbFitSingle};
 pub use shrink::{
-    shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
-    ShrinkageResult, ShrunkEstimate,
+    shrink_lfc, shrink_lfc_bb, shrink_lfc_hurdle, shrink_lfc_nb, shrink_lfc_zinb,
+    HurdleComponent, ShrinkageConfig, ShrinkageMethod, ShrinkageResult, ShrunkEstimate,
 };
 pub use zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit, ZinbFitSingle};
 pub use bb::{model_bb, model_bb_with_config, BbConfig, BbFit, BbFitSingle, DispersionMethod};

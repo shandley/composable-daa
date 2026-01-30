@@ -84,8 +84,8 @@ pub mod prelude {
     pub use crate::model::lmm::{fit_lmm_from_formula, model_lmm, DfMethod, LmmConfig, LmmFit};
     pub use crate::model::nb::{model_nb, NbFit};
     pub use crate::model::shrink::{
-        shrink_lfc, shrink_lfc_nb, shrink_lfc_zinb, ShrinkageConfig, ShrinkageMethod,
-        ShrinkageResult, ShrunkEstimate,
+        shrink_lfc, shrink_lfc_bb, shrink_lfc_hurdle, shrink_lfc_nb, shrink_lfc_zinb,
+        HurdleComponent, ShrinkageConfig, ShrinkageMethod, ShrinkageResult, ShrunkEstimate,
     };
     pub use crate::model::zinb::{model_zinb, model_zinb_with_config, ZinbConfig, ZinbFit};
     pub use crate::model::bb::{model_bb, model_bb_with_config, BbConfig, BbFit, DispersionMethod};
