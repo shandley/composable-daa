@@ -142,9 +142,11 @@ Pipeline::new()
 - Linear mixed models (LMM) with REML estimation for longitudinal/repeated measures data
   - Random intercepts: `(1 | subject)`
   - Supports lme4-style formula syntax
-  - Variance component estimation (tau², sigma²)
+  - Variance component estimation (G matrix, sigma²)
   - Intraclass correlation coefficient (ICC)
   - BLUPs for random effects
+  - Random slopes: `(1 + time | subject)`, `(0 + time | subject)`
+  - Correlation estimation between random intercept and slope
 - Testing (Wald, LRT, permutation) - including test_wald_lmm for mixed models
 - Correction (Benjamini-Hochberg)
 - Spike-in validation (abundance, presence, stress testing, threshold optimization)
@@ -153,7 +155,6 @@ Pipeline::new()
 - CLI tool with full feature coverage
 
 ### Future Work
-- Random slopes for LMM: `(1 + time | subject)`
 - Satterthwaite/Kenward-Roger df approximation for LMM
 - Beta-binomial models
 - Hurdle models
