@@ -1,6 +1,9 @@
 //! Pipeline runner for composing and executing analysis steps.
 
-use crate::correct::{bh::correct_bh_wald, bh::create_results};
+use crate::correct::{
+    bh::correct_bh_permutation, bh::correct_bh_wald, bh::create_results,
+    bh::create_results_permutation,
+};
 use crate::data::{CountMatrix, DaResultSet, DesignMatrix, Formula, Metadata};
 use crate::error::{DaaError, Result};
 use crate::filter::{
@@ -10,9 +13,11 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::model::{model_lm, model_nb, model_zinb};
-use crate::normalize::{norm_clr, norm_tss, TransformedMatrix};
+use crate::normalize::{norm_clr, norm_tmm, norm_tss, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
-use crate::test::{test_wald, test_wald_nb, test_wald_zinb};
+use crate::test::{
+    test_permutation, test_wald, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
+};
 use crate::zero::pseudocount::add_pseudocount;
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +68,8 @@ pub enum PipelineStep {
     NormalizeCLR,
     /// Apply TSS normalization (relative abundances).
     NormalizeTSS { scale_factor: f64 },
+    /// Apply TMM normalization (robust to asymmetric changes).
+    NormalizeTMM { log_transform: bool },
 
     // === Model Fitting ===
     /// Fit linear model.
@@ -75,6 +82,11 @@ pub enum PipelineStep {
     // === Testing ===
     /// Wald test for a coefficient.
     TestWald { coefficient: String },
+    /// Permutation test for a coefficient (non-parametric).
+    TestPermutation {
+        coefficient: String,
+        n_permutations: usize,
+    },
 
     // === Multiple Testing Correction ===
     /// Benjamini-Hochberg correction.
@@ -280,6 +292,18 @@ impl Pipeline {
         self.normalize_tss(1_000_000.0)
     }
 
+    /// Add TMM normalization (robust to asymmetric differential expression).
+    pub fn normalize_tmm(mut self) -> Self {
+        self.steps.push(PipelineStep::NormalizeTMM { log_transform: false });
+        self
+    }
+
+    /// Add TMM normalization with log transformation.
+    pub fn normalize_tmm_log(mut self) -> Self {
+        self.steps.push(PipelineStep::NormalizeTMM { log_transform: true });
+        self
+    }
+
     /// Add linear model.
     pub fn model_lm(mut self, formula: &str) -> Self {
         self.steps.push(PipelineStep::ModelLM {
@@ -321,6 +345,23 @@ impl Pipeline {
         self
     }
 
+    /// Add permutation test (non-parametric, distribution-free).
+    ///
+    /// Permutation tests don't assume normality and work well for small samples.
+    /// They randomly shuffle group labels to build a null distribution.
+    pub fn test_permutation(mut self, coefficient: &str, n_permutations: usize) -> Self {
+        self.steps.push(PipelineStep::TestPermutation {
+            coefficient: coefficient.to_string(),
+            n_permutations,
+        });
+        self
+    }
+
+    /// Add permutation test with default settings (100 permutations).
+    pub fn test_permutation_quick(self, coefficient: &str) -> Self {
+        self.test_permutation(coefficient, 100)
+    }
+
     /// Add BH correction.
     pub fn correct_bh(mut self) -> Self {
         self.steps.push(PipelineStep::CorrectBH);
@@ -357,10 +398,12 @@ struct PipelineState {
     pseudocount_data: Option<nalgebra::DMatrix<f64>>,
     transformed: Option<TransformedMatrix>,
     design: Option<DesignMatrix>,
+    formula_str: Option<String>,
     lm_fit: Option<crate::model::LmFit>,
     nb_fit: Option<crate::model::NbFit>,
     zinb_fit: Option<crate::model::ZinbFit>,
     wald_result: Option<crate::test::WaldResult>,
+    permutation_result: Option<PermutationResults>,
     bh_corrected: Option<crate::correct::bh::BhCorrected>,
     prevalence: Option<PrevalenceProfile>,
 }
@@ -373,10 +416,12 @@ impl PipelineState {
             pseudocount_data: None,
             transformed: None,
             design: None,
+            formula_str: None,
             lm_fit: None,
             nb_fit: None,
             zinb_fit: None,
             wald_result: None,
+            permutation_result: None,
             bh_corrected: None,
             prevalence: None,
         }
@@ -480,10 +525,29 @@ impl PipelineState {
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
 
+            PipelineStep::NormalizeTMM { log_transform } => {
+                // TMM works directly on counts
+                let config = crate::normalize::TmmConfig {
+                    log_transform: *log_transform,
+                    ..Default::default()
+                };
+                let tmm_result = norm_tmm(&self.counts)?;
+                // If log_transform requested, rerun with config
+                let tmm_result = if *log_transform {
+                    crate::normalize::norm_tmm_with_config(&self.counts, &config)?
+                } else {
+                    tmm_result
+                };
+                self.transformed = Some(tmm_result.to_transformed());
+                // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
             // === Model Fitting ===
             PipelineStep::ModelLM { formula } => {
                 let parsed_formula = Formula::parse(formula)?;
                 self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                self.formula_str = Some(formula.clone());
                 let transformed = self.transformed.as_ref().ok_or_else(|| {
                     DaaError::Pipeline("Must normalize before fitting model".to_string())
                 })?;
@@ -494,6 +558,7 @@ impl PipelineState {
             PipelineStep::ModelNB { formula } => {
                 let parsed_formula = Formula::parse(formula)?;
                 self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                self.formula_str = Some(formula.clone());
                 let design = self.design.as_ref().unwrap();
                 // NB model works directly on counts (no normalization needed)
                 self.nb_fit = Some(model_nb(&self.counts, design)?);
@@ -504,6 +569,7 @@ impl PipelineState {
             PipelineStep::ModelZINB { formula } => {
                 let parsed_formula = Formula::parse(formula)?;
                 self.design = Some(DesignMatrix::from_formula(&self.metadata, &parsed_formula)?);
+                self.formula_str = Some(formula.clone());
                 let design = self.design.as_ref().unwrap();
                 // ZINB model works directly on counts (no normalization needed)
                 self.zinb_fit = Some(model_zinb(&self.counts, design)?);
@@ -527,21 +593,58 @@ impl PipelineState {
                 }
             }
 
+            PipelineStep::TestPermutation {
+                coefficient,
+                n_permutations,
+            } => {
+                // Permutation tests require transformed data and formula
+                let transformed = self.transformed.as_ref().ok_or_else(|| {
+                    DaaError::Pipeline("Must normalize before permutation test".to_string())
+                })?;
+                let formula_str = self.formula_str.as_ref().ok_or_else(|| {
+                    DaaError::Pipeline("Must fit model before permutation test".to_string())
+                })?;
+                let config = PermutationConfig {
+                    n_permutations: *n_permutations,
+                    ..Default::default()
+                };
+                self.permutation_result = Some(test_permutation(
+                    transformed,
+                    &self.metadata,
+                    formula_str,
+                    coefficient,
+                    &config,
+                )?);
+            }
+
             // === Correction ===
             PipelineStep::CorrectBH => {
-                let wald = self.wald_result.as_ref().ok_or_else(|| {
-                    DaaError::Pipeline("Must perform Wald test before BH correction".to_string())
-                })?;
-                self.bh_corrected = Some(correct_bh_wald(wald));
+                // Handle either Wald or permutation test results
+                if let Some(wald) = self.wald_result.as_ref() {
+                    self.bh_corrected = Some(correct_bh_wald(wald));
+                } else if let Some(perm) = self.permutation_result.as_ref() {
+                    self.bh_corrected = Some(correct_bh_permutation(perm));
+                } else {
+                    return Err(DaaError::Pipeline(
+                        "Must perform statistical test before BH correction".to_string(),
+                    ));
+                }
             }
         }
         Ok(self)
     }
 
     fn finalize(self, method_name: &str) -> Result<DaResultSet> {
-        let wald = self.wald_result.ok_or_else(|| {
-            DaaError::Pipeline("Pipeline must include a test step".to_string())
-        })?;
+        // Need either Wald or permutation results
+        let has_wald = self.wald_result.is_some();
+        let has_perm = self.permutation_result.is_some();
+
+        if !has_wald && !has_perm {
+            return Err(DaaError::Pipeline(
+                "Pipeline must include a test step".to_string(),
+            ));
+        }
+
         let bh = self.bh_corrected.ok_or_else(|| {
             DaaError::Pipeline("Pipeline must include correction step".to_string())
         })?;
@@ -576,13 +679,25 @@ impl PipelineState {
                 .collect()
         };
 
-        Ok(create_results(
-            &wald,
-            &bh,
-            &prevalence,
-            &mean_abundances,
-            method_name,
-        ))
+        // Create results from the appropriate test
+        if let Some(wald) = self.wald_result {
+            Ok(create_results(
+                &wald,
+                &bh,
+                &prevalence,
+                &mean_abundances,
+                method_name,
+            ))
+        } else {
+            let perm = self.permutation_result.unwrap();
+            Ok(create_results_permutation(
+                &perm,
+                &bh,
+                &prevalence,
+                &mean_abundances,
+                method_name,
+            ))
+        }
     }
 }
 
@@ -859,5 +974,51 @@ mod tests {
         let parsed = PipelineConfig::from_yaml(&yaml).unwrap();
         assert_eq!(parsed.name, "advanced");
         assert_eq!(parsed.steps.len(), 8);
+    }
+
+    #[test]
+    fn test_pipeline_with_permutation_test() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let results = Pipeline::new()
+            .name("test-permutation")
+            .filter_prevalence(0.3)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_permutation("grouptreatment", 50) // Small for fast tests
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        // Should have results
+        assert!(results.len() > 0);
+        assert_eq!(results.method, "test-permutation");
+
+        // Check that results have valid values
+        for r in results.iter() {
+            assert!(r.p_value >= 0.0 && r.p_value <= 1.0);
+            assert!(r.q_value >= 0.0 && r.q_value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_permutation_quick() {
+        let counts = create_test_counts();
+        let metadata = create_test_metadata();
+
+        let results = Pipeline::new()
+            .name("test-perm-quick")
+            .filter_prevalence(0.3)
+            .add_pseudocount(0.5)
+            .normalize_clr()
+            .model_lm("~ group")
+            .test_permutation_quick("grouptreatment")
+            .correct_bh()
+            .run(&counts, &metadata)
+            .unwrap();
+
+        assert!(results.len() > 0);
     }
 }

@@ -100,6 +100,41 @@ enum Commands {
         pseudocount: f64,
     },
 
+    /// Run analysis with permutation tests (non-parametric, distribution-free)
+    Permutation {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Formula for the model (e.g., "~ group")
+        #[arg(short, long)]
+        formula: String,
+
+        /// Coefficient to test (e.g., "grouptreatment")
+        #[arg(short = 't', long)]
+        test_coef: String,
+
+        /// Output path for results TSV
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Prevalence threshold (default: 0.1)
+        #[arg(long, default_value = "0.1")]
+        prevalence: f64,
+
+        /// Pseudocount value (default: 0.5)
+        #[arg(long, default_value = "0.5")]
+        pseudocount: f64,
+
+        /// Number of permutations (default: 1000)
+        #[arg(long, default_value = "1000")]
+        n_permutations: usize,
+    },
+
     /// Profile a count matrix
     Profile {
         /// Path to count matrix TSV
@@ -381,6 +416,26 @@ fn main() {
             pseudocount,
         ),
 
+        Commands::Permutation {
+            counts,
+            metadata,
+            formula,
+            test_coef,
+            output,
+            prevalence,
+            pseudocount,
+            n_permutations,
+        } => cmd_permutation(
+            &counts,
+            &metadata,
+            &formula,
+            &test_coef,
+            &output,
+            prevalence,
+            pseudocount,
+            n_permutations,
+        ),
+
         Commands::Profile { counts, format } => cmd_profile(&counts, &format),
 
         Commands::Validate {
@@ -563,6 +618,66 @@ fn cmd_linda(
         .normalize_clr()
         .model_lm(formula)
         .test_wald(test_coef)
+        .correct_bh()
+        .run(&counts, &metadata)?;
+
+    eprintln!("Writing results to {:?}...", output_path);
+    results.to_tsv(output_path)?;
+
+    eprintln!("Done! {} features tested", results.len());
+    let n_sig = results.significant().len();
+    eprintln!("  {} significant at q < 0.05", n_sig);
+
+    // Print top hits
+    let mut sorted = results.results.clone();
+    sorted.sort_by(|a, b| a.q_value.partial_cmp(&b.q_value).unwrap());
+    if !sorted.is_empty() {
+        eprintln!("\nTop 5 hits:");
+        for r in sorted.iter().take(5) {
+            eprintln!(
+                "  {}: estimate={:.3}, q={:.4}",
+                r.feature_id, r.estimate, r.q_value
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Run analysis with permutation tests
+fn cmd_permutation(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    formula: &str,
+    test_coef: &str,
+    output_path: &PathBuf,
+    prevalence: f64,
+    pseudocount: f64,
+    n_permutations: usize,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    eprintln!("Running permutation test analysis...");
+    eprintln!("  Formula: {}", formula);
+    eprintln!("  Testing: {}", test_coef);
+    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
+    eprintln!("  Permutations: {}", n_permutations);
+
+    let results = Pipeline::new()
+        .name("Permutation")
+        .filter_prevalence(prevalence)
+        .add_pseudocount(pseudocount)
+        .normalize_clr()
+        .model_lm(formula)
+        .test_permutation(test_coef, n_permutations)
         .correct_bh()
         .run(&counts, &metadata)?;
 

@@ -164,3 +164,13 @@ daa stress -c counts.tsv -m metadata.tsv -g group -t treatment
 3. **Sparse-first** - Design for 70-90% zeros from the start
 4. **Composable** - Consistent interfaces, arbitrary chaining
 5. **Prevalence-aware** - Groupwise prevalence as first-class concept
+
+## Experiments Directory
+
+The `experiments/` directory documents research opportunities identified during development:
+
+1. **BV Compositional Analysis** - Ravel 2011 reanalysis showing compositional constraints
+2. **Spike-in Load Estimation** - Stammler 2016 demonstrating 9.8x load variation
+3. **Compositional Artifact Audit** - Proposed meta-analysis of published findings
+
+These serve as validation case studies and potential standalone publications. See `experiments/README.md` for details.

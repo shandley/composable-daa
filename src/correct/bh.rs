@@ -2,7 +2,7 @@
 
 use crate::data::{DaResult, DaResultSet};
 use crate::profile::PrevalenceProfile;
-use crate::test::WaldResult;
+use crate::test::{PermutationResults, WaldResult};
 use serde::{Deserialize, Serialize};
 
 /// Result of BH correction.
@@ -107,6 +107,13 @@ pub fn correct_bh_wald(wald: &WaldResult) -> BhCorrected {
     correct_bh(&p_values, &feature_ids)
 }
 
+/// Apply BH correction to permutation test results.
+pub fn correct_bh_permutation(perm: &PermutationResults) -> BhCorrected {
+    let p_values: Vec<f64> = perm.results.iter().map(|r| r.p_value).collect();
+    let feature_ids: Vec<String> = perm.results.iter().map(|r| r.feature_id.clone()).collect();
+    correct_bh(&p_values, &feature_ids)
+}
+
 /// Create full DA results from Wald test and BH correction.
 ///
 /// Combines Wald test statistics with corrected p-values and prevalence
@@ -134,6 +141,44 @@ pub fn create_results(
                 w.std_error,
                 w.statistic,
                 w.p_value,
+                q_value,
+                prev,
+                mean_abund,
+            )
+        })
+        .collect();
+
+    DaResultSet::new(method.to_string(), results)
+}
+
+/// Create full DA results from permutation test and BH correction.
+///
+/// Combines permutation test statistics with corrected p-values and prevalence
+/// information to create a complete result set.
+pub fn create_results_permutation(
+    perm: &PermutationResults,
+    bh: &BhCorrected,
+    prevalence: &PrevalenceProfile,
+    mean_abundances: &[f64],
+    method: &str,
+) -> DaResultSet {
+    let results: Vec<DaResult> = perm
+        .results
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let q_value = bh.q_values.get(i).copied().unwrap_or(f64::NAN);
+            let prev = prevalence.feature_prevalence.get(i).copied().unwrap_or(0.0);
+            let mean_abund = mean_abundances.get(i).copied().unwrap_or(0.0);
+
+            // Use observed_stat as the test statistic
+            DaResult::new(
+                p.feature_id.clone(),
+                perm.coefficient.clone(),
+                p.estimate,
+                p.std_error,
+                p.observed_stat, // The observed t-statistic
+                p.p_value,
                 q_value,
                 prev,
                 mean_abund,
