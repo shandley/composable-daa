@@ -1167,3 +1167,4 @@ fn main() -> Result<(), Error> {
 - ~~Permutation tests~~: Implemented with parallel execution via rayon
 - ~~Prevalence threshold optimization~~: Implemented with spike-in validation and multiple criteria
 - ~~LLM-friendly profiling~~: Implemented with YAML and markdown output formats
+- ~~ALR normalization~~: Implemented with multiple reference selection strategies (least variable, most abundant, by ID)

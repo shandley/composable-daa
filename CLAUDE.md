@@ -52,6 +52,7 @@ src/
 │   └── pseudocount.rs    # Add pseudocount (fixed or adaptive)
 ├── normalize/      # Normalization methods
 │   ├── clr.rs            # Centered log-ratio
+│   ├── alr.rs            # Additive log-ratio (relative to reference)
 │   ├── tss.rs            # Total sum scaling
 │   ├── tmm.rs            # Trimmed mean of M-values (edgeR-style)
 │   └── spikein.rs        # Spike-in normalization for absolute abundance
@@ -115,14 +116,14 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (254 tests passing)
+## Current Status (265 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix)
 - Profiling (sparsity, prevalence, library size, LLM-friendly output)
 - Filtering (prevalence, abundance, library size, stratified)
 - Zero handling (pseudocount)
-- Normalization (CLR, TSS, TMM, spike-in)
+- Normalization (CLR, ALR, TSS, TMM, spike-in)
 - Models (LM, NB, ZINB with model comparison and shrinkage)
 - Testing (Wald, LRT, permutation)
 - Correction (Benjamini-Hochberg)
@@ -135,7 +136,6 @@ Pipeline::new()
 - Linear mixed models (LMM) for longitudinal data
 - Beta-binomial models
 - Hurdle models
-- ALR normalization with reference selection
 - CSS normalization (metagenomeSeq-style)
 
 ## Build and Test

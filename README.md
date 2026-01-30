@@ -80,6 +80,7 @@ for result in results.significant() {
 
 ### Normalization
 - **CLR** - Centered log-ratio (compositional)
+- **ALR** - Additive log-ratio (relative to reference taxon)
 - **TSS** - Total sum scaling (relative abundance)
 - **TMM** - Trimmed mean of M-values (edgeR-style)
 - **Spike-in** - Absolute abundance via experimental spike-ins
@@ -164,7 +165,7 @@ cargo test           # Run all tests
 cargo test --lib     # Library tests only
 ```
 
-254 tests covering all components.
+265 tests covering all components.
 
 ## License
 

@@ -13,7 +13,7 @@ use crate::filter::{
     TierThresholds,
 };
 use crate::model::{model_lm, model_nb, model_zinb};
-use crate::normalize::{norm_clr, norm_tmm, norm_tss, TransformedMatrix};
+use crate::normalize::{norm_alr, norm_clr, norm_tmm, norm_tss, ReferenceSelection, TransformedMatrix};
 use crate::profile::{profile_prevalence, PrevalenceProfile};
 use crate::test::{
     test_permutation, test_wald, test_wald_nb, test_wald_zinb, PermutationConfig, PermutationResults,
@@ -66,6 +66,10 @@ pub enum PipelineStep {
     // === Normalization ===
     /// Apply CLR normalization.
     NormalizeCLR,
+    /// Apply ALR normalization (relative to reference taxon).
+    NormalizeALR {
+        reference: ReferenceSelection,
+    },
     /// Apply TSS normalization (relative abundances).
     NormalizeTSS { scale_factor: f64 },
     /// Apply TMM normalization (robust to asymmetric changes).
@@ -271,6 +275,27 @@ impl Pipeline {
     pub fn normalize_clr(mut self) -> Self {
         self.steps.push(PipelineStep::NormalizeCLR);
         self
+    }
+
+    /// Add ALR normalization (additive log-ratio relative to reference).
+    ///
+    /// ALR transforms compositional data by computing log-ratios relative to
+    /// a reference taxon. The output has n-1 features (reference excluded).
+    pub fn normalize_alr(mut self, reference: ReferenceSelection) -> Self {
+        self.steps.push(PipelineStep::NormalizeALR { reference });
+        self
+    }
+
+    /// Add ALR normalization with least variable taxon as reference.
+    ///
+    /// Automatically selects the taxon with lowest coefficient of variation.
+    pub fn normalize_alr_least_variable(self) -> Self {
+        self.normalize_alr(ReferenceSelection::LeastVariable)
+    }
+
+    /// Add ALR normalization with specific taxon ID as reference.
+    pub fn normalize_alr_by_id(self, taxon_id: &str) -> Self {
+        self.normalize_alr(ReferenceSelection::TaxonId(taxon_id.to_string()))
     }
 
     /// Add TSS normalization (relative abundances).
@@ -514,6 +539,22 @@ impl PipelineState {
                     self.counts.sample_ids().to_vec(),
                 )?);
                 // Store prevalence profile for results
+                self.prevalence = Some(profile_prevalence(&self.counts));
+            }
+
+            PipelineStep::NormalizeALR { reference } => {
+                let data = self.pseudocount_data.as_ref().ok_or_else(|| {
+                    DaaError::Pipeline("Must add pseudocount before ALR".to_string())
+                })?;
+                let alr_result = norm_alr(
+                    data,
+                    self.counts.feature_ids().to_vec(),
+                    self.counts.sample_ids().to_vec(),
+                    reference.clone(),
+                )?;
+                // Convert to TransformedMatrix for pipeline compatibility
+                self.transformed = Some(alr_result.to_transformed_matrix());
+                // Store prevalence profile for results (note: has n-1 features now)
                 self.prevalence = Some(profile_prevalence(&self.counts));
             }
 
