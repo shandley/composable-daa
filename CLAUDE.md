@@ -148,7 +148,7 @@ Pipeline::new()
     .run(&counts, &metadata)
 ```
 
-## Current Status (354 tests passing)
+## Current Status (360 tests passing)
 
 ### Implemented
 - Core data structures (CountMatrix, Metadata, Formula, DesignMatrix, MixedFormula, RandomDesignMatrix)
@@ -167,7 +167,7 @@ Pipeline::new()
   - Correlation estimation between random intercept and slope
   - Satterthwaite df approximation (coefficient-specific df accounting for variance uncertainty)
   - Kenward-Roger df approximation (bias-corrected covariance + df for small samples)
-- Testing (Wald, LRT, permutation) - including test_wald_lmm for mixed models
+- Testing (Wald, LRT, permutation) - including LRT for hurdle models
 - Correction (Benjamini-Hochberg)
 - Spike-in validation (abundance, presence, stress testing, threshold optimization)
 - Pipeline composition with YAML serialization
@@ -185,7 +185,6 @@ Pipeline::new()
   - Supports Poisson or NB for count component
 
 ### Future Work
-- LRT for hurdle models
 - Shrinkage for BB/hurdle effect sizes
 
 ## Build and Test

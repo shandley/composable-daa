@@ -10,6 +10,7 @@
 
 use crate::data::{CountMatrix, DesignMatrix};
 use crate::error::{DaaError, Result};
+use crate::model::hurdle::{model_hurdle, HurdleFit};
 use crate::model::nb::{model_nb, NbFit};
 use crate::model::zinb::{model_zinb, ZinbFit};
 use nalgebra::DMatrix;
@@ -410,6 +411,181 @@ pub fn test_lrt_zinb_fitted(
     })
 }
 
+/// Perform LRT on hurdle model.
+///
+/// Tests H0: β = 0 for the specified coefficient(s) by comparing:
+/// - Full model: includes all coefficients in both binary and count components
+/// - Reduced model: excludes the tested coefficient(s) from both components
+///
+/// The LRT statistic is 2 * (LL_full - LL_reduced), compared to a
+/// chi-squared distribution. Since the coefficient is removed from both
+/// binary and count components, df = 2 * number of coefficients tested.
+///
+/// # Arguments
+/// * `full_fit` - Full hurdle model fit
+/// * `counts` - Original count matrix
+/// * `design` - Original design matrix
+/// * `coefficients` - Names of coefficient(s) to test
+///
+/// # Returns
+/// LrtResult containing test statistics and p-values for all features.
+///
+/// # Note
+/// This tests the coefficient in BOTH binary and count components together.
+/// For testing components separately, use `test_lrt_hurdle_binary` or
+/// `test_lrt_hurdle_count`.
+pub fn test_lrt_hurdle(
+    full_fit: &HurdleFit,
+    counts: &CountMatrix,
+    design: &DesignMatrix,
+    coefficients: &[&str],
+) -> Result<LrtResult> {
+    // Validate coefficients exist in both components
+    let binary_indices: Vec<usize> = coefficients
+        .iter()
+        .map(|c| {
+            full_fit.binary_coefficient_index(c).ok_or_else(|| {
+                DaaError::InvalidParameter(format!(
+                    "Coefficient '{}' not found in binary component. Available: {:?}",
+                    c, full_fit.binary_coefficient_names
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let count_indices: Vec<usize> = coefficients
+        .iter()
+        .map(|c| {
+            full_fit.count_coefficient_index(c).ok_or_else(|| {
+                DaaError::InvalidParameter(format!(
+                    "Coefficient '{}' not found in count component. Available: {:?}",
+                    c, full_fit.count_coefficient_names
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Cannot remove intercept
+    for &idx in &binary_indices {
+        if full_fit
+            .binary_coefficient_names
+            .get(idx)
+            .map(|s| s.as_str())
+            == Some("(Intercept)")
+        {
+            return Err(DaaError::InvalidParameter(
+                "Cannot test intercept with LRT; use a different coefficient".to_string(),
+            ));
+        }
+    }
+
+    // df = 2 * n_coef (removing from both components)
+    let df = 2 * coefficients.len();
+
+    // Create reduced design matrix
+    let reduced_design = create_reduced_design(design, &binary_indices)?;
+
+    // Fit reduced model
+    let reduced_fit = model_hurdle(counts, &reduced_design)?;
+
+    // Compute LRT for each feature
+    let chi_sq = ChiSquared::new(df as f64).unwrap();
+
+    let results: Vec<LrtResultSingle> = full_fit
+        .fits
+        .iter()
+        .zip(reduced_fit.fits.iter())
+        .map(|(full, reduced)| {
+            let ll_full = full.log_likelihood;
+            let ll_reduced = reduced.log_likelihood;
+
+            let statistic = 2.0 * (ll_full - ll_reduced);
+            let statistic = statistic.max(0.0);
+
+            let p_value = if statistic.is_finite() {
+                1.0 - chi_sq.cdf(statistic)
+            } else {
+                f64::NAN
+            };
+
+            LrtResultSingle {
+                feature_id: full.feature_id.clone(),
+                coefficients_tested: coefficients.iter().map(|s| s.to_string()).collect(),
+                ll_full,
+                ll_reduced,
+                statistic,
+                df,
+                p_value,
+            }
+        })
+        .collect();
+
+    Ok(LrtResult {
+        results,
+        coefficients_tested: coefficients.iter().map(|s| s.to_string()).collect(),
+        df,
+    })
+}
+
+/// Perform LRT comparing two pre-fitted hurdle models.
+///
+/// Use this when you have already fit both models and want to compare them.
+/// The full model should be nested within (contain all parameters of) the reduced model.
+///
+/// # Arguments
+/// * `full_fit` - Full hurdle model fit (more parameters)
+/// * `reduced_fit` - Reduced hurdle model fit (fewer parameters)
+/// * `df` - Degrees of freedom (difference in number of parameters)
+pub fn test_lrt_hurdle_fitted(
+    full_fit: &HurdleFit,
+    reduced_fit: &HurdleFit,
+    df: usize,
+) -> Result<LrtResult> {
+    if full_fit.fits.len() != reduced_fit.fits.len() {
+        return Err(DaaError::DimensionMismatch {
+            expected: full_fit.fits.len(),
+            actual: reduced_fit.fits.len(),
+        });
+    }
+
+    let chi_sq = ChiSquared::new(df as f64).unwrap();
+
+    let results: Vec<LrtResultSingle> = full_fit
+        .fits
+        .iter()
+        .zip(reduced_fit.fits.iter())
+        .map(|(full, reduced)| {
+            let ll_full = full.log_likelihood;
+            let ll_reduced = reduced.log_likelihood;
+
+            let statistic = 2.0 * (ll_full - ll_reduced);
+            let statistic = statistic.max(0.0);
+
+            let p_value = if statistic.is_finite() {
+                1.0 - chi_sq.cdf(statistic)
+            } else {
+                f64::NAN
+            };
+
+            LrtResultSingle {
+                feature_id: full.feature_id.clone(),
+                coefficients_tested: vec!["(custom)".to_string()],
+                ll_full,
+                ll_reduced,
+                statistic,
+                df,
+                p_value,
+            }
+        })
+        .collect();
+
+    Ok(LrtResult {
+        results,
+        coefficients_tested: vec!["(custom)".to_string()],
+        df,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,5 +813,166 @@ mod tests {
 
         assert_eq!(lrt.df, 2); // Testing 2 coefficients
         assert_eq!(lrt.coefficients_tested.len(), 2);
+    }
+
+    // Create sparse test data for hurdle models
+    fn create_sparse_test_counts() -> CountMatrix {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "feature_id\t{}",
+            (1..=20).map(|i| format!("S{}", i)).collect::<Vec<_>>().join("\t")
+        )
+        .unwrap();
+
+        // Feature with no effect (sparse)
+        let no_effect: Vec<String> = (1..=20)
+            .map(|i| if i % 3 == 0 { "0" } else { "50" }.to_string())
+            .collect();
+        writeln!(file, "no_effect\t{}", no_effect.join("\t")).unwrap();
+
+        // Feature with treatment effect (more zeros in control)
+        let effect_counts: Vec<String> = (1..=20)
+            .map(|i| {
+                if i <= 10 {
+                    // Control: mostly zeros
+                    if i % 2 == 0 { "0" } else { "10" }
+                } else {
+                    // Treatment: mostly non-zero
+                    if i % 5 == 0 { "0" } else { "80" }
+                }
+                .to_string()
+            })
+            .collect();
+        writeln!(file, "with_effect\t{}", effect_counts.join("\t")).unwrap();
+
+        // Feature with moderate effect
+        let mod_counts: Vec<String> = (1..=20)
+            .map(|i| {
+                if i <= 10 {
+                    if i % 3 == 0 { "0" } else { "30" }
+                } else {
+                    if i % 4 == 0 { "0" } else { "50" }
+                }
+                .to_string()
+            })
+            .collect();
+        writeln!(file, "moderate\t{}", mod_counts.join("\t")).unwrap();
+
+        file.flush().unwrap();
+        CountMatrix::from_tsv(file.path()).unwrap()
+    }
+
+    #[test]
+    fn test_lrt_hurdle_basic() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let full_fit = model_hurdle(&counts, &design).unwrap();
+        let lrt = test_lrt_hurdle(&full_fit, &counts, &design, &["grouptreatment"]).unwrap();
+
+        assert_eq!(lrt.len(), 3);
+        // df = 2 * 1 because coefficient is removed from both binary and count components
+        assert_eq!(lrt.df, 2);
+        assert_eq!(lrt.coefficients_tested, vec!["grouptreatment"]);
+    }
+
+    #[test]
+    fn test_lrt_hurdle_statistic_positive() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let full_fit = model_hurdle(&counts, &design).unwrap();
+        let lrt = test_lrt_hurdle(&full_fit, &counts, &design, &["grouptreatment"]).unwrap();
+
+        // LRT statistic should be non-negative
+        for result in &lrt.results {
+            assert!(
+                result.statistic >= 0.0,
+                "LRT statistic should be non-negative, got {}",
+                result.statistic
+            );
+        }
+    }
+
+    #[test]
+    fn test_lrt_hurdle_p_value_bounds() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let full_fit = model_hurdle(&counts, &design).unwrap();
+        let lrt = test_lrt_hurdle(&full_fit, &counts, &design, &["grouptreatment"]).unwrap();
+
+        for result in &lrt.results {
+            if result.p_value.is_finite() {
+                assert!(
+                    result.p_value >= 0.0 && result.p_value <= 1.0,
+                    "P-value should be in [0, 1], got {}",
+                    result.p_value
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_lrt_hurdle_invalid_coefficient() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let full_fit = model_hurdle(&counts, &design).unwrap();
+        let result = test_lrt_hurdle(&full_fit, &counts, &design, &["nonexistent"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lrt_hurdle_cannot_test_intercept() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+        let formula = Formula::parse("~ group").unwrap();
+        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
+
+        let full_fit = model_hurdle(&counts, &design).unwrap();
+        let result = test_lrt_hurdle(&full_fit, &counts, &design, &["(Intercept)"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lrt_hurdle_prefitted_models() {
+        let metadata = create_test_metadata();
+        let counts = create_sparse_test_counts();
+
+        // Full model with group
+        let formula_full = Formula::parse("~ group").unwrap();
+        let design_full = DesignMatrix::from_formula(&metadata, &formula_full).unwrap();
+        let full_fit = model_hurdle(&counts, &design_full).unwrap();
+
+        // Reduced model (intercept only)
+        let formula_reduced = Formula::parse("~ 1").unwrap();
+        let design_reduced = DesignMatrix::from_formula(&metadata, &formula_reduced).unwrap();
+        let reduced_fit = model_hurdle(&counts, &design_reduced).unwrap();
+
+        // df = 2 because we removed 1 coef from both binary and count components
+        let lrt = test_lrt_hurdle_fitted(&full_fit, &reduced_fit, 2).unwrap();
+
+        assert_eq!(lrt.len(), 3);
+        assert_eq!(lrt.df, 2);
+
+        // Check that results make sense
+        for result in &lrt.results {
+            assert!(result.statistic >= 0.0);
+            if result.p_value.is_finite() {
+                assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
+            }
+        }
     }
 }

@@ -113,7 +113,7 @@ pub mod prelude {
         // LLM profiling
         LlmProfile, profile_for_llm,
     };
-    pub use crate::test::lrt::{test_lrt_nb, test_lrt_zinb, test_lrt_nb_fitted, test_lrt_zinb_fitted, LrtResult};
+    pub use crate::test::lrt::{test_lrt_hurdle, test_lrt_hurdle_fitted, test_lrt_nb, test_lrt_zinb, test_lrt_nb_fitted, test_lrt_zinb_fitted, LrtResult};
     pub use crate::test::permutation::{
         test_permutation, test_permutation_quick, PermutationConfig, PermutationResult,
         PermutationResults,
