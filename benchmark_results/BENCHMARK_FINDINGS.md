@@ -31,6 +31,59 @@ This is within acceptable range for α=0.05.
 
 ---
 
+## Critical Finding: Beta-Binomial FDR Is Fundamental, Not a Bug
+
+### Problem
+Despite fixing the FPR issue on null data (98.5% → 3%), BB still shows ~85% FDR when true effects exist.
+
+### Investigation Findings
+
+**The "false positives" have REAL proportion changes in the data.**
+
+When we spike UP some features by 16x, the proportions of OTHER features must decrease (compositional closure). BB correctly detects these decreases:
+
+| Feature | Control Prop | Treatment Prop | Actual log2FC | BB Detects? |
+|---------|--------------|----------------|---------------|-------------|
+| Feature_0061 | 0.00165 | 0.00017 | -3.24 | YES (q<1e-8) |
+| Feature_0107 | 0.00148 | 0.00019 | -2.94 | YES (q<1e-8) |
+| Feature_0048 | 0.00484 | 0.00085 | -2.50 | YES (q<1e-8) |
+
+These are **real** proportion changes (up to 10x decrease), not statistical artifacts.
+
+### Root Cause: Proportion-Based Inference on Compositional Data
+
+BB models proportions directly: Y_i / library_size. For compositional data:
+- Proportions must sum to 1 (closed-sum constraint)
+- Increasing some features' proportions FORCES others to decrease
+- BB correctly detects these forced decreases
+- This is expected behavior, not a bug
+
+### Evidence
+
+**Direction of false positives matches compositional prediction:**
+- True positives: 10 spiked UP, 8 spiked DOWN (net UP)
+- False positives: 21 positive, 57 negative (opposite to TP direction)
+
+**LinDA (CLR-based) handles this correctly:**
+- Same features that BB detects with q<1e-8
+- LinDA reports q > 0.09 (not significant)
+- CLR transformation corrects for compositional artifacts
+
+### Conclusion
+
+BB is fundamentally unsuitable for standard differential abundance analysis due to compositional artifacts. **This is not fixable** without changing the model's target (from proportions to something else).
+
+### Updated Recommendation
+
+**DO NOT USE BB for standard DAA.** Use instead:
+- LinDA (q<0.10) for compositionally-aware analysis
+- ZINB for count-based analysis with zero-inflation
+- Hurdle for presence/absence + abundance modeling
+
+See `benchmark_results/power_analysis/BB_FDR_INVESTIGATION.md` for full details.
+
+---
+
 ## Model Performance Comparison
 
 ### On Synthetic Data (effect size = 1.0 log2FC, n=20 per group)

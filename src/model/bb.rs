@@ -3,11 +3,33 @@
 //! Implements a beta-binomial generalized linear model with logit link,
 //! suitable for modeling proportions with overdispersion common in microbiome studies.
 //!
+//! # ⚠️ Important: Compositional Data Warning
+//!
+//! **This model detects proportion changes, not absolute abundance changes.**
+//!
+//! For compositional data (where proportions sum to 1), the beta-binomial model
+//! will detect **compositional artifacts** as significant. When some features
+//! increase in abundance, others must decrease proportionally (closed-sum constraint).
+//! The BB model correctly detects these proportion decreases, but they are artifacts
+//! of the experimental design, not independent biological changes.
+//!
+//! **Empirical evidence**: On synthetic data with known ground truth, BB shows
+//! ~85% false discovery rate due to compositional artifacts. The "false positives"
+//! have real proportion changes (up to 10x) that are correctly detected.
+//!
+//! **Recommendation**: For standard differential abundance analysis, use:
+//! - LinDA (CLR + LM) for compositionally-aware analysis
+//! - ZINB for count-based analysis with zero-inflation
+//! - Hurdle for presence/absence + abundance modeling
+//!
+//! Use BB only when proportion changes (including compositional artifacts) are
+//! the explicit target of analysis.
+//!
+//! # Mathematical Formulation
+//!
 //! The beta-binomial distribution models counts Y out of n trials where the
 //! success probability varies according to a Beta distribution. This allows
 //! for overdispersion relative to the binomial distribution.
-//!
-//! # Mathematical Formulation
 //!
 //! **Distribution**: Y_i ~ BetaBinomial(n_i, α_i, β_i)
 //!
