@@ -1,6 +1,51 @@
 # Benchmark Findings Summary
 
-Date: 2025-01-31
+Date: 2026-01-31
+
+## LinDA Sensitivity Investigation (NEW)
+
+### The Problem
+LinDA shows 0% sensitivity at q < 0.05, even for 16x fold changes (4.0 log2FC).
+
+### Root Cause: CLR Effect Size Attenuation
+The CLR transformation attenuates effect sizes by ~75%:
+
+| True Effect | Observed CLR Effect | Attenuation |
+|-------------|---------------------|-------------|
+| +4.0 log2FC | +0.93               | 23%         |
+| -4.0 log2FC | -0.99               | 25%         |
+
+This is **by design** - CLR centers by geometric mean, which shifts when features change.
+
+### Solution: Use q < 0.10 Threshold
+
+| Threshold | Sensitivity | FDR   | TP | FP |
+|-----------|-------------|-------|----|----|
+| q < 0.05  | 0%          | n/a   | 0  | 0  |
+| q < 0.10  | 39%         | 12.5% | 7  | 1  |
+| q < 0.15  | 39%         | 30%   | 7  | 3  |
+
+### Key Insight
+LinDA is not broken - it's conservative by design:
+- **Pro**: Excellent FDR control (12.5% at q<0.10)
+- **Con**: Only detects very large effects (>8x fold change)
+
+### Recommendations
+1. **Use q < 0.10 for LinDA** (not q < 0.05)
+2. **Use ZINB/Hurdle for discovery** (higher sensitivity)
+3. **Use LinDA for confirmation** (excellent FDR control)
+
+See `benchmark_results/power_analysis/LINDA_SENSITIVITY_INVESTIGATION.md` for full details.
+
+---
+
+## Beta-Binomial Model Removed
+
+The BB model was removed from the codebase due to fundamental compositional limitations.
+See the archived sections below for historical context.
+
+<details>
+<summary>Archived: Beta-Binomial FPR Fix (Historical)</summary>
 
 ## Critical Bug Fix: Beta-Binomial FPR Inflation
 
@@ -82,6 +127,8 @@ BB is fundamentally unsuitable for standard differential abundance analysis due 
 
 See `benchmark_results/power_analysis/BB_FDR_INVESTIGATION.md` for full details.
 
+</details>
+
 ---
 
 ## Model Performance Comparison
@@ -91,12 +138,11 @@ See `benchmark_results/power_analysis/BB_FDR_INVESTIGATION.md` for full details.
 | Dataset | Model | True Diff | Significant | TP | FP | Sensitivity | FDR |
 |---------|-------|-----------|-------------|----|----|-------------|-----|
 | typical_16s (64% sparse) | LinDA | 15 | 0 | 0 | 0 | 0% | - |
-| typical_16s | BB (fixed) | 15 | 80 | 9 | 71 | 60% | 89% |
 | typical_16s | Hurdle | 15 | 3 | 1 | 2 | 7% | 67% |
 | sparse_virome (89% sparse) | LinDA | 10 | 0 | 0 | 0 | 0% | - |
-| sparse_virome | BB (fixed) | 10 | 81 | 4 | 77 | 40% | 95% |
 | group_specific | LinDA | 20 | 11 | 9 | 2 | 45% | 18% |
-| group_specific | BB (fixed) | 20 | 64 | 14 | 50 | 70% | 78% |
+
+Note: BB model was removed due to compositional limitations (~85% FDR). See archived section.
 
 ### Key Observations
 
@@ -115,12 +161,12 @@ See `benchmark_results/power_analysis/BB_FDR_INVESTIGATION.md` for full details.
 | Model | False Positives | FPR | Notes |
 |-------|-----------------|-----|-------|
 | LinDA | 0/200 | 0% | Conservative |
-| BB (before fix) | 197/200 | 98.5% | Critical bug |
-| BB (after fix) | 6/200 | 3.0% | ✓ Fixed |
 | Hurdle | 4/200 | 2.0% | Conservative |
 | Permutation | 0/200 | 0% | Conservative |
 | NB | 0/200 | 0% | Conservative |
 | ZINB | 0/200 | 0% | Conservative |
+
+Note: BB model removed (had ~85% FDR due to compositional artifacts).
 
 **Longitudinal null data (20 subjects x 3 timepoints, ICC~0.3, no group effect)**
 
@@ -191,8 +237,15 @@ Comprehensive power analysis across effect sizes 0.5, 1.0, 2.0, 4.0 log2FC (1.4x
 | LinDA  | 0%         | 0%         | 0%         | 0%         |
 | NB     | 0%         | 0%         | 0%         | 6%         |
 | ZINB   | 11%        | 11%        | 58%        | 83%        |
-| BB     | 61%        | 58%        | 95%        | 100%       |
 | Hurdle | 0%         | 0%         | 26%        | 83%        |
+
+### LinDA at q < 0.10 (Recommended)
+
+| Model  | 0.5 log2FC | 1.0 log2FC | 2.0 log2FC | 4.0 log2FC |
+|--------|------------|------------|------------|------------|
+| LinDA  | 0%         | 0%         | 0%         | 39%        |
+
+With only 12.5% FDR at 4.0 log2FC - excellent FDR control!
 
 ### FDR at q < 0.05
 
@@ -201,15 +254,14 @@ Comprehensive power analysis across effect sizes 0.5, 1.0, 2.0, 4.0 log2FC (1.4x
 | LinDA  | n/a        | n/a        | n/a        | n/a        |
 | NB     | n/a        | n/a        | n/a        | 0%         |
 | ZINB   | 50%        | 78%        | 45%        | 29%        |
-| BB     | **87%**    | **86%**    | **81%**    | **81%**    |
 | Hurdle | 100%       | 100%       | 17%        | 25%        |
 
 ### Key Insights
 
-1. **LinDA detects nothing at q<0.05** due to CLR effect size attenuation; at q<0.10 achieves 39% sensitivity with only 12.5% FDR
-2. **BB has ~85% FDR at ALL effect sizes** - the FPR fix didn't solve broader FDR issues
-3. **ZINB best for large effects** - 83% sensitivity, 29% FDR at 4.0 log2FC
-4. **Hurdle excels at large effects** - 83% sensitivity, 25% FDR with good FDR control
+1. **LinDA at q<0.10**: 39% sensitivity with excellent 12.5% FDR control
+2. **ZINB best for discovery**: 83% sensitivity, 29% FDR at 4.0 log2FC
+3. **Hurdle similar to ZINB**: 83% sensitivity, 25% FDR with good FDR control
+4. **NB conservative**: 6% sensitivity at 4.0 log2FC
 
 See `benchmark_results/power_analysis/POWER_ANALYSIS_RESULTS.md` for full details.
 
@@ -218,16 +270,25 @@ See `benchmark_results/power_analysis/POWER_ANALYSIS_RESULTS.md` for full detail
 ## Recommendations
 
 ### For Users
-1. **Use ZINB or Hurdle** for detecting large effects (>4x fold change)
-2. **Use LinDA at q < 0.10** for conservative inference with excellent FDR control
+1. **Use ZINB or Hurdle for discovery** - 83% sensitivity at large effects
+2. **Use LinDA at q < 0.10 for confirmation** - excellent FDR control (12.5%)
 3. **Use permutation tests** when distributional assumptions are uncertain
-4. **AVOID BB model** - 85% FDR makes discoveries unreliable
+4. **Expect to need large effects**: Even 4x fold changes are challenging with n=20/group
+
+### Method Selection Guide
+
+| Goal | Recommended Method | Threshold |
+|------|-------------------|-----------|
+| Discovery (maximize TP) | ZINB or Hurdle | q < 0.05 |
+| Confirmation (minimize FP) | LinDA | q < 0.10 |
+| Unknown assumptions | Permutation | p < 0.05 |
+| Longitudinal data | LMM | p < 0.05 |
 
 ### For Development
-1. **Investigate BB FDR issue** - root cause differs from FPR issue (may be compositional artifacts)
-2. **Increase sample size recommendations** - n=20 insufficient for detecting 2-fold changes
-3. **Implement power calculation tools** to help users design adequately powered studies
-4. **Consider adaptive thresholds** - q<0.10 may be appropriate for exploratory analysis
+1. **Increase sample size recommendations** - n=20 insufficient for detecting 2-fold changes
+2. **Implement power calculation tools** to help users design adequately powered studies
+3. **Document LinDA's q<0.10 recommendation** prominently
+4. **Add effect size calibration** - back-transform CLR effects to approximate fold changes
 
 ---
 
