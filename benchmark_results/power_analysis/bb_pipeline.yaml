@@ -1,0 +1,10 @@
+name: bb-power
+description: Beta-binomial pipeline for power analysis
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelBB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

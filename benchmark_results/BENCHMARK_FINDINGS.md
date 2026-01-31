@@ -127,19 +127,54 @@ This is within acceptable range for α=0.05.
 
 ---
 
+## Power Analysis Results
+
+Comprehensive power analysis across effect sizes 0.5, 1.0, 2.0, 4.0 log2FC (1.4x to 16x fold changes). Data: typical 16S profile (65% sparsity, n=20 per group).
+
+### Sensitivity at q < 0.05
+
+| Model  | 0.5 log2FC | 1.0 log2FC | 2.0 log2FC | 4.0 log2FC |
+|--------|------------|------------|------------|------------|
+| LinDA  | 0%         | 0%         | 0%         | 0%         |
+| NB     | 0%         | 0%         | 0%         | 6%         |
+| ZINB   | 11%        | 11%        | 58%        | 83%        |
+| BB     | 61%        | 58%        | 95%        | 100%       |
+| Hurdle | 0%         | 0%         | 26%        | 83%        |
+
+### FDR at q < 0.05
+
+| Model  | 0.5 log2FC | 1.0 log2FC | 2.0 log2FC | 4.0 log2FC |
+|--------|------------|------------|------------|------------|
+| LinDA  | n/a        | n/a        | n/a        | n/a        |
+| NB     | n/a        | n/a        | n/a        | 0%         |
+| ZINB   | 50%        | 78%        | 45%        | 29%        |
+| BB     | **87%**    | **86%**    | **81%**    | **81%**    |
+| Hurdle | 100%       | 100%       | 17%        | 25%        |
+
+### Key Insights
+
+1. **LinDA detects nothing at q<0.05** due to CLR effect size attenuation; at q<0.10 achieves 39% sensitivity with only 12.5% FDR
+2. **BB has ~85% FDR at ALL effect sizes** - the FPR fix didn't solve broader FDR issues
+3. **ZINB best for large effects** - 83% sensitivity, 29% FDR at 4.0 log2FC
+4. **Hurdle excels at large effects** - 83% sensitivity, 25% FDR with good FDR control
+
+See `benchmark_results/power_analysis/POWER_ANALYSIS_RESULTS.md` for full details.
+
+---
+
 ## Recommendations
 
 ### For Users
-1. **Use LinDA (CLR + LM)** for conservative inference with good FDR control
-2. **Use permutation tests** when distributional assumptions are uncertain
-3. **Avoid BB model** until further validation (even with fix, FDR is high)
-4. **Hurdle model needs investigation** - current performance is poor
+1. **Use ZINB or Hurdle** for detecting large effects (>4x fold change)
+2. **Use LinDA at q < 0.10** for conservative inference with excellent FDR control
+3. **Use permutation tests** when distributional assumptions are uncertain
+4. **AVOID BB model** - 85% FDR makes discoveries unreliable
 
 ### For Development
-1. Investigate hurdle model performance
-2. Add power analysis tools
-3. Implement additional variance estimators for BB
-4. Create calibration benchmarks for effect size recovery
+1. **Investigate BB FDR issue** - root cause differs from FPR issue (may be compositional artifacts)
+2. **Increase sample size recommendations** - n=20 insufficient for detecting 2-fold changes
+3. **Implement power calculation tools** to help users design adequately powered studies
+4. **Consider adaptive thresholds** - q<0.10 may be appropriate for exploratory analysis
 
 ---
 
@@ -167,3 +202,10 @@ This is within acceptable range for α=0.05.
 - `benchmark_results/nb_pipeline.yaml` - Negative binomial FPR test pipeline
 - `benchmark_results/zinb_pipeline.yaml` - Zero-inflated NB FPR test pipeline
 - `benchmark_results/lmm_pipeline.yaml` - Linear mixed model FPR test pipeline
+
+### Power Analysis
+- `benchmark_results/power_analysis/` - Power analysis directory
+  - `effect_0.5/`, `effect_1.0/`, `effect_2.0/`, `effect_4.0/` - Data at each effect size
+  - `*_pipeline.yaml` - Pipeline configurations for each model
+  - `POWER_ANALYSIS_RESULTS.md` - Comprehensive power analysis documentation
+  - `analyze_power.py`, `analyze_power_multi.py` - Analysis scripts

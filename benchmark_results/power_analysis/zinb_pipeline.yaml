@@ -1,0 +1,10 @@
+name: zinb-power
+description: Zero-inflated negative binomial pipeline for power analysis
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelZINB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

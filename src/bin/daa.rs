@@ -423,6 +423,14 @@ enum Commands {
         /// Number of samples per group (overrides preset)
         #[arg(long)]
         n_samples: Option<usize>,
+
+        /// Effect size in log2 fold change (overrides preset)
+        #[arg(long)]
+        effect_size: Option<f64>,
+
+        /// Number of differential features (overrides preset)
+        #[arg(long)]
+        n_differential: Option<usize>,
     },
 
     /// Fetch classic benchmark datasets from Zenodo
@@ -627,7 +635,9 @@ fn main() {
             seed,
             n_features,
             n_samples,
-        } => cmd_generate(&preset, &output, seed, n_features, n_samples),
+            effect_size,
+            n_differential,
+        } => cmd_generate(&preset, &output, seed, n_features, n_samples, effect_size, n_differential),
 
         Commands::Fetch {
             dataset,
@@ -1449,6 +1459,8 @@ fn cmd_generate(
     seed: u64,
     n_features: Option<usize>,
     n_samples: Option<usize>,
+    effect_size: Option<f64>,
+    n_differential: Option<usize>,
 ) -> Result<()> {
     // Select preset config
     let mut config = match preset.to_lowercase().as_str() {
@@ -1474,6 +1486,12 @@ fn cmd_generate(
     }
     if let Some(n) = n_samples {
         config.n_samples_per_group = n;
+    }
+    if let Some(es) = effect_size {
+        config.effect_size = es;
+    }
+    if let Some(n) = n_differential {
+        config.n_differential = n;
     }
 
     eprintln!("Generating synthetic data...");

@@ -1,0 +1,13 @@
+name: linda-power
+description: LinDA pipeline for power analysis
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !AddPseudocount
+  value: 0.5
+- NormalizeCLR
+- !ModelLM
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

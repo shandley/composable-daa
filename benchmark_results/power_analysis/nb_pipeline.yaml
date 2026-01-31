@@ -1,0 +1,10 @@
+name: nb-power
+description: Negative binomial pipeline for power analysis
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelNB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

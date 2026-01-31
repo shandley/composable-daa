@@ -1,0 +1,10 @@
+name: hurdle-power
+description: Hurdle model pipeline for power analysis
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelHurdle
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH
