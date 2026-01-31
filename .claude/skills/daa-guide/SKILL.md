@@ -9,13 +9,12 @@ This skill provides evidence-based guidance for method selection, threshold choi
 
 ## Quick Method Selection
 
-| Goal | Method | Threshold | Sensitivity | FDR | Use Case |
-|------|--------|-----------|-------------|-----|----------|
-| **Discovery** | ZINB | q < 0.05 | 83% | 29% | Maximize true positives |
-| **Discovery** | Hurdle | q < 0.05 | 83% | 25% | Sparse data with structural zeros |
-| **Confirmation** | LinDA | q < 0.10 | 39% | 12.5% | High-confidence findings |
-| **Non-parametric** | Permutation | p < 0.05 | - | - | Unknown distributions |
-| **Longitudinal** | LMM | p < 0.05 | - | - | Repeated measures |
+| Sparsity | Method | Threshold | Sensitivity | FDR | Use Case |
+|----------|--------|-----------|-------------|-----|----------|
+| >70% | **Hurdle** | q < 0.05 | 83% | 25% | Sparse data with structural zeros |
+| 50-70% | **ZINB** | q < 0.05 | 83% | 29% | Moderate sparsity, excess zeros |
+| <30% | **LinDA** | q < 0.10 | 39% | 12.5% | Low sparsity, high-confidence findings |
+| Longitudinal | **LMM** | q < 0.05 | - | - | Repeated measures |
 
 ## CRITICAL: LinDA Threshold
 
@@ -33,7 +32,7 @@ This is by design, not a bug. CLR centers by geometric mean to handle compositio
 1. First, check if they used q < 0.05 → suggest q < 0.10
 2. If still nothing at q < 0.10, the effects may be too small
 3. LinDA needs >8x fold changes to detect anything reliably
-4. Suggest ZINB or Hurdle for discovery if FDR control is less critical
+4. Suggest trying Hurdle if FDR control is less critical
 
 ## Effect Size Requirements
 
@@ -79,8 +78,8 @@ This is by design, not a bug. CLR centers by geometric mean to handle compositio
 
 ### LMM (Linear Mixed Model)
 - **Best for**: Longitudinal data, repeated measures
-- **Threshold**: p < 0.05
-- **Pros**: Handles within-subject correlation
+- **Threshold**: q < 0.05
+- **Pros**: Handles within-subject correlation, auto-detected by `recommend`
 - **Cons**: Requires CLR transformation, same attenuation as LinDA
 
 ## Interpreting Results
@@ -93,11 +92,13 @@ This is by design, not a bug. CLR centers by geometric mean to handle compositio
 
 ### ZINB/Hurdle Results
 - Effect sizes are on log scale (interpretable as log fold change)
+- `fold_change = exp(estimate)`
 - Higher sensitivity means more discoveries but also more false positives
 - Consider biological plausibility of findings
 
 ### Sample Size Considerations
-- n=20 per group: Only large effects (>4x) reliably detectable
+- n=10 per group: Only huge effects (>8x) reliably detectable
+- n=20 per group: Large effects (>4x) detectable
 - n=50 per group: Moderate effects (>2x) become detectable
 - Power analysis recommended before study
 
@@ -105,35 +106,61 @@ This is by design, not a bug. CLR centers by geometric mean to handle compositio
 
 ```
 Is your data longitudinal/repeated measures?
-├── YES → Use LMM with q < 0.05
+├── YES → recommend auto-detects and runs LMM
 └── NO → Continue...
 
-What is your primary goal?
-├── DISCOVERY (find as many true effects as possible)
-│   ├── High sparsity (>50% zeros)? → Hurdle (q < 0.05)
-│   └── Moderate sparsity? → ZINB (q < 0.05)
-├── CONFIRMATION (high-confidence findings only)
-│   └── LinDA (q < 0.10)
-└── UNSURE about distributional assumptions
-    └── Permutation test (p < 0.05)
+What is your sparsity level?
+├── >70% zeros → Hurdle (q < 0.05)
+├── 50-70% zeros → ZINB (q < 0.05)
+├── 30-50% zeros → ZINB or LinDA
+└── <30% zeros → LinDA (q < 0.10)
+
+Unsure about distributional assumptions?
+└── Permutation test (p < 0.05)
 ```
+
+## CLI Quick Reference
+
+The unified workflow handles method selection automatically:
+
+```bash
+# Let the tool choose the best method for your data
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
+
+# Just see the recommendation (no execution)
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment
+
+# Generate editable YAML for custom configurations
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --yaml -o pipeline.yaml
+
+# Non-parametric alternative
+daa permutation -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+```
+
+### Longitudinal/Repeated Measures
+
+The `recommend` command auto-detects these designs:
+
+```bash
+# Metadata with subject + timepoint columns → LMM automatically
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
+
+# For custom formulas (interactions, random slopes):
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --yaml -o pipeline.yaml
+# Edit pipeline.yaml, then:
+daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
+```
+
+## Troubleshooting: 0 Significant Features
+
+1. **Check threshold**: Did you use LinDA with q < 0.05? Try q < 0.10
+2. **Check sample size**: n < 20/group has very limited power
+3. **Check sparsity**: >70% sparsity with LinDA? Try Hurdle instead
+4. **Run validation**: `daa validate` to see if method works on your data structure
+5. **Check raw p-values**: Are any features close (p < 0.1)?
 
 ## For More Details
 
 - Method comparison benchmarks: see [method-comparison.md](method-comparison.md)
 - Q-value threshold analysis: see [thresholds.md](thresholds.md)
 - Result interpretation guide: see [interpretation.md](interpretation.md)
-
-## CLI Quick Reference
-
-```bash
-# Discovery (high sensitivity)
-daa zinb -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
-daa hurdle -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
-
-# Confirmation (low FDR) - NOTE: use q < 0.10 when filtering results
-daa linda -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
-
-# Non-parametric
-daa permutation -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
-```

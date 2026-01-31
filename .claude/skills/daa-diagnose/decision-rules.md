@@ -176,12 +176,20 @@ Has subject/patient column?
 
 ## Formula Construction
 
-For cross-sectional studies, use `daa recommend --run` which auto-selects the method:
+The `daa recommend --run` command auto-detects study designs and selects appropriate methods:
+
 ```bash
+# Cross-sectional, longitudinal, or repeated measures - all auto-detected
 daa recommend -c counts.tsv -m metadata.tsv -g group -t target --run -o results.tsv
 ```
 
-For complex designs (longitudinal, batch effects), use `daa run` with a YAML config.
+For custom formulas (interactions, covariates, random slopes), use `--yaml`:
+
+```bash
+daa recommend -c counts.tsv -m metadata.tsv -g group -t target --yaml -o pipeline.yaml
+# Edit pipeline.yaml to customize formula
+daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
+```
 
 ### Basic Two-Group Comparison
 ```
@@ -194,7 +202,7 @@ Command: daa recommend -c counts.tsv -m metadata.tsv -g treatment -t disease --r
 ```
 Formula: ~ group + age + bmi
 Test coefficient: group{treatment_level}
-Note: Use daa run with YAML config for custom formulas with covariates
+Note: Use --yaml to generate config, then edit to add covariates
 Note: Continuous covariates are centered automatically
 ```
 
@@ -202,16 +210,16 @@ Note: Continuous covariates are centered automatically
 ```
 Formula: ~ group + sex + batch
 Test coefficient: group{treatment_level}
-Note: Use daa run with YAML config for custom formulas with covariates
+Note: Use --yaml to generate config, then edit to add covariates
 Note: First level is reference (alphabetically)
 ```
 
-### Longitudinal - Main Effect Only
+### Longitudinal - Main Effect Only (AUTO-DETECTED)
 ```
 Design: Compare groups, adjusted for time
 Formula: ~ group + time + (1 | subject)
 Test coefficient: group{treatment_level}
-Note: Use daa run with YAML config for longitudinal designs
+Command: daa recommend --run auto-detects longitudinal designs!
 
 Interpretation: Average difference between groups across all timepoints
 ```
@@ -221,7 +229,7 @@ Interpretation: Average difference between groups across all timepoints
 Design: Do groups change differently over time?
 Formula: ~ group * time + (1 | subject)
 Test coefficient: group{treatment_level}:time{level}
-Note: Use daa run with YAML config for interaction terms
+Note: Use --yaml, then edit to add interaction term
 
 Interpretation: Difference in change from baseline between groups
 ```
@@ -230,7 +238,7 @@ Interpretation: Difference in change from baseline between groups
 ```
 Design: Allow individual-specific time trajectories
 Formula: ~ group * time + (1 + time | subject)
-Note: Use daa run with YAML config for random slopes
+Note: Use --yaml, then edit to add random slopes
 Note: Requires sufficient data (>5 timepoints recommended)
 ```
 
@@ -238,7 +246,7 @@ Note: Requires sufficient data (>5 timepoints recommended)
 ```
 Design: 2-5 batches
 Formula: ~ group + batch
-Note: Use daa run with YAML config to include batch as covariate
+Note: Use --yaml, then edit to add batch covariate
 Note: Fixed effect estimates batch-specific intercepts
 ```
 
@@ -246,7 +254,7 @@ Note: Fixed effect estimates batch-specific intercepts
 ```
 Design: >5 batches or batches are nuisance
 Formula: ~ group + (1 | batch)
-Note: Use daa run with YAML config for random batch effects
+Note: Use --yaml, then edit to add batch random effect
 Note: Random effect pools information across batches
 ```
 

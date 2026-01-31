@@ -244,16 +244,20 @@ See [decision-rules.md](decision-rules.md) for complete decision tree and benchm
    Rationale: Repeated measures require random effects to account for
    within-subject correlation. Moderate sparsity allows CLR transformation.
 
-   Formula: "~ treatment * timepoint + (1 | subject_id)"
+   Formula: "~ treatment + timepoint + (1 | subject_id)"
    - treatment: main effect of interest
    - timepoint: time effect
-   - treatment * timepoint: interaction (different trajectories?)
    - (1 | subject_id): random intercept per subject
 
-   Note: For longitudinal designs with random effects, use daa run with
-   a YAML pipeline config, as recommend doesn't yet auto-detect longitudinal designs.
+   The recommend command auto-detects longitudinal designs and runs LMM:
+   daa recommend -c counts.tsv -m metadata.tsv -g treatment -t case --run -o results.tsv
+
+   For custom formulas (interactions, random slopes), use --yaml:
+   daa recommend -c counts.tsv -m metadata.tsv -g treatment -t case --yaml -o pipeline.yaml
+   # Edit to add: ~ treatment * timepoint + (1 + timepoint | subject_id)
+   daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
    ```
-6. Warns: "Use LMM to avoid inflated Type I error from non-independent samples"
+6. Warns: "LMM accounts for within-subject correlation to avoid inflated Type I error"
 
 ### Example 3: Study with Batch Effects
 
