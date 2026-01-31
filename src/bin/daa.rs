@@ -1430,23 +1430,70 @@ fn cmd_recommend(
     let group_sizes: Vec<usize> = profile.data_summary.groups.sizes.values().cloned().collect();
     let min_group_size = group_sizes.iter().min().copied().unwrap_or(0);
 
-    // Detect potential covariates from metadata columns
+    // Detect potential covariates and study design from metadata columns
     let all_columns: Vec<&str> = metadata.column_names().iter().map(|s| s.as_str()).collect();
-    let covariate_patterns = ["age", "sex", "gender", "bmi", "weight", "batch", "run", "plate",
-                              "lane", "site", "location", "center", "subject", "patient",
-                              "individual", "participant", "time", "timepoint", "visit", "day", "week"];
-    let detected_covariates: Vec<&str> = all_columns
+
+    // Patterns for different column types
+    let subject_patterns = ["subject", "patient", "individual", "participant", "person", "donor"];
+    let time_patterns = ["time", "timepoint", "visit", "day", "week", "month", "year", "tp"];
+    let batch_patterns = ["batch", "run", "plate", "lane", "site", "location", "center", "sequencing"];
+    let continuous_patterns = ["age", "bmi", "weight", "height"];
+
+    // Detect subject column (for repeated measures / longitudinal)
+    let subject_column: Option<&str> = all_columns
+        .iter()
+        .find(|col| {
+            let col_lower = col.to_lowercase();
+            col_lower != group.to_lowercase() &&
+            subject_patterns.iter().any(|p| col_lower.contains(p))
+        })
+        .copied();
+
+    // Detect time column (for longitudinal)
+    let time_column: Option<&str> = all_columns
+        .iter()
+        .find(|col| {
+            let col_lower = col.to_lowercase();
+            col_lower != group.to_lowercase() &&
+            time_patterns.iter().any(|p| col_lower.contains(p))
+        })
+        .copied();
+
+    // Detect batch columns
+    let batch_columns: Vec<&str> = all_columns
         .iter()
         .filter(|col| {
             let col_lower = col.to_lowercase();
             col_lower != group.to_lowercase() &&
-            covariate_patterns.iter().any(|p| col_lower.contains(p))
+            batch_patterns.iter().any(|p| col_lower.contains(p))
         })
         .copied()
         .collect();
 
-    // Determine recommended method based on sparsity
-    let (method, threshold, rationale) = if sparsity > 0.70 {
+    // Detect continuous covariates
+    let continuous_covariates: Vec<&str> = all_columns
+        .iter()
+        .filter(|col| {
+            let col_lower = col.to_lowercase();
+            col_lower != group.to_lowercase() &&
+            continuous_patterns.iter().any(|p| col_lower.contains(p))
+        })
+        .copied()
+        .collect();
+
+    // Determine study design
+    let is_longitudinal = subject_column.is_some() && time_column.is_some();
+    let is_repeated_measures = subject_column.is_some() && time_column.is_none();
+
+    // Collect all detected covariates (excluding subject/time which are handled specially)
+    let detected_covariates: Vec<&str> = batch_columns
+        .iter()
+        .chain(continuous_covariates.iter())
+        .copied()
+        .collect();
+
+    // Determine recommended method based on sparsity (for cross-sectional)
+    let (base_method, base_threshold, base_rationale) = if sparsity > 0.70 {
         ("hurdle", "0.05", "High sparsity (>70%) indicates structural zeros - Hurdle model separates presence from abundance")
     } else if sparsity > 0.50 {
         ("zinb", "0.05", "Moderate-high sparsity (50-70%) suggests zero-inflation - ZINB models excess zeros")
@@ -1456,11 +1503,64 @@ fn cmd_recommend(
         ("linda", "0.10", "Low sparsity (<30%) - standard CLR + linear model works well. Use q<0.10 due to CLR attenuation")
     };
 
+    // Override for longitudinal/repeated measures designs
+    let (method, threshold, rationale, formula, study_design): (&str, &str, String, String, &str) = if is_longitudinal {
+        let subj = subject_column.unwrap();
+        let time = time_column.unwrap();
+        let formula = format!("~ {} + {} + (1 | {})", group, time, subj);
+        (
+            "lmm",
+            "0.05",
+            format!("Longitudinal design detected ({} + {}) - LMM with random intercept per subject", time, subj),
+            formula,
+            "longitudinal",
+        )
+    } else if is_repeated_measures {
+        let subj = subject_column.unwrap();
+        let formula = format!("~ {} + (1 | {})", group, subj);
+        (
+            "lmm",
+            "0.05",
+            format!("Repeated measures detected ({}) - LMM with random intercept per subject", subj),
+            formula,
+            "repeated_measures",
+        )
+    } else {
+        (
+            base_method,
+            base_threshold,
+            base_rationale.to_string(),
+            format!("~ {}", group),
+            "cross_sectional",
+        )
+    };
+
+    // For longitudinal/repeated measures, --run is not supported (needs LMM via YAML)
+    if (is_longitudinal || is_repeated_measures) && run {
+        eprintln!("ERROR: Longitudinal/repeated measures design detected.");
+        eprintln!();
+        if is_longitudinal {
+            eprintln!("  Detected: subject column '{}', time column '{}'",
+                     subject_column.unwrap(), time_column.unwrap());
+        } else {
+            eprintln!("  Detected: subject column '{}' (repeated measures)",
+                     subject_column.unwrap());
+        }
+        eprintln!();
+        eprintln!("This requires a Linear Mixed Model (LMM) which is not yet supported");
+        eprintln!("with --run. Please use --yaml to generate a pipeline config:");
+        eprintln!();
+        eprintln!("  daa recommend -c {} -m {} -g {} -t {} --yaml -o pipeline.yaml",
+                 counts_path.display(), metadata_path.display(), group, target);
+        eprintln!();
+        eprintln!("Then run with:");
+        eprintln!("  daa run -c {} -m {} --config pipeline.yaml -o results.tsv",
+                 counts_path.display(), metadata_path.display());
+        return Ok(());
+    }
+
     // Build the coefficient name
     let test_coef = format!("{}{}", group, target);
-
-    // Build the formula
-    let formula = format!("~ {}", group);
 
     // Handle YAML output mode
     if yaml {
@@ -1477,6 +1577,10 @@ fn cmd_recommend(
             group,
             min_group_size,
             &profile.library_size.by_group.as_ref().map(|g| g.ratio),
+            study_design,
+            &rationale,
+            subject_column,
+            time_column,
         );
 
         if quiet {
@@ -1491,6 +1595,16 @@ fn cmd_recommend(
             println!("  daa run -c {} -m {} --config {} -o results.tsv",
                      counts_path.display(), metadata_path.display(), yaml_file.display());
             println!();
+            if is_longitudinal || is_repeated_measures {
+                println!("Study design: {}", if is_longitudinal { "Longitudinal" } else { "Repeated measures" });
+                if let Some(subj) = subject_column {
+                    println!("  Subject column: {}", subj);
+                }
+                if let Some(time) = time_column {
+                    println!("  Time column: {}", time);
+                }
+                println!();
+            }
             if !detected_covariates.is_empty() {
                 println!("Detected potential covariates: {}", detected_covariates.join(", "));
                 println!("Edit the YAML to include them in the formula if needed.");
@@ -1644,22 +1758,33 @@ fn generate_pipeline_yaml(
     group: &str,
     min_group_size: usize,
     library_ratio: &Option<f64>,
+    study_design: &str,
+    rationale: &str,
+    subject_column: Option<&str>,
+    time_column: Option<&str>,
 ) -> String {
     let mut yaml = String::new();
 
     // Header comments
     yaml.push_str("# Pipeline Configuration\n");
     yaml.push_str("# Generated by: daa recommend\n");
-    yaml.push_str(&format!("# Method: {} (selected based on {:.1}% sparsity)\n", method.to_uppercase(), sparsity * 100.0));
+
+    // Method and study design info
+    if study_design == "longitudinal" || study_design == "repeated_measures" {
+        yaml.push_str(&format!("# Method: {} (Linear Mixed Model)\n", method.to_uppercase()));
+        yaml.push_str(&format!("# Study design: {}\n", study_design.replace("_", " ")));
+        if let Some(subj) = subject_column {
+            yaml.push_str(&format!("#   Subject column: {}\n", subj));
+        }
+        if let Some(time) = time_column {
+            yaml.push_str(&format!("#   Time column: {}\n", time));
+        }
+    } else {
+        yaml.push_str(&format!("# Method: {} (selected based on {:.1}% sparsity)\n", method.to_uppercase(), sparsity * 100.0));
+    }
     yaml.push_str("#\n");
 
     // Method selection rationale
-    let rationale = match method {
-        "hurdle" => "High sparsity (>70%) - Hurdle model separates presence from abundance",
-        "zinb" => "Moderate sparsity (50-70%) - ZINB models zero-inflation",
-        "linda" => "Low sparsity (<30%) - CLR + linear model works well",
-        _ => "Selected based on data characteristics",
-    };
     yaml.push_str(&format!("# Rationale: {}\n", rationale));
 
     // Threshold guidance
@@ -1703,11 +1828,20 @@ fn generate_pipeline_yaml(
         "hurdle" => "Hurdle",
         "zinb" => "ZINB",
         "linda" => "LinDA",
+        "lmm" => "LMM",
         _ => method,
     };
 
+    let description = if study_design == "longitudinal" {
+        format!("Auto-generated {} pipeline for longitudinal data", method_upper)
+    } else if study_design == "repeated_measures" {
+        format!("Auto-generated {} pipeline for repeated measures", method_upper)
+    } else {
+        format!("Auto-generated {} pipeline", method_upper)
+    };
+
     yaml.push_str(&format!("name: {}\n", method_upper));
-    yaml.push_str(&format!("description: Auto-generated {} pipeline\n", method_upper));
+    yaml.push_str(&format!("description: {}\n", description));
     yaml.push_str("steps:\n");
 
     // Filter step
@@ -1722,6 +1856,14 @@ fn generate_pipeline_yaml(
         }
         "zinb" => {
             yaml.push_str("- !ModelZINB\n");
+            yaml.push_str(&format!("  formula: \"{}\"\n", formula));
+        }
+        "lmm" => {
+            // LMM requires CLR transformation
+            yaml.push_str("- !AddPseudocount\n");
+            yaml.push_str("  value: 0.5\n");
+            yaml.push_str("- NormalizeCLR\n");
+            yaml.push_str("- !ModelLMM\n");
             yaml.push_str(&format!("  formula: \"{}\"\n", formula));
         }
         "linda" | _ => {
