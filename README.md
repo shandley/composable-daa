@@ -91,7 +91,6 @@ for result in results.significant() {
 - **Linear mixed model (LMM)** - For longitudinal/repeated measures with random effects
 - **Negative binomial GLM (NB)** - For raw counts with overdispersion
 - **Zero-inflated NB (ZINB)** - For excess zeros beyond NB expectation
-- **Beta-binomial (BB)** - For proportions with overdispersion
 - **Hurdle model** - Two-part model for sparse counts (logistic + truncated NB)
 
 ### Testing
@@ -100,7 +99,7 @@ for result in results.significant() {
 - **Permutation test** - Distribution-free, non-parametric
 
 ### Effect Size Shrinkage
-- **Empirical Bayes shrinkage** - Stabilize noisy estimates (LM, NB, ZINB, BB, Hurdle)
+- **Empirical Bayes shrinkage** - Stabilize noisy estimates (LM, NB, ZINB, Hurdle)
 
 ### Multiple Testing
 - **Benjamini-Hochberg** - FDR control
@@ -136,7 +135,6 @@ daa validate -c counts.tsv -m metadata.tsv -g group -t treatment \
 | `linda` | Run LinDA-style analysis (CLR + LM + Wald) |
 | `nb` | Run negative binomial GLM analysis |
 | `zinb` | Run zero-inflated negative binomial analysis |
-| `bb` | Run beta-binomial analysis for proportions |
 | `hurdle` | Run hurdle model analysis for sparse counts |
 | `permutation` | Run analysis with permutation tests |
 | `run` | Execute pipeline from YAML configuration |

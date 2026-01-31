@@ -63,7 +63,6 @@ src/
 │   ├── lmm.rs            # Linear mixed model (REML estimation)
 │   ├── nb.rs             # Negative binomial GLM (IRLS)
 │   ├── zinb.rs           # Zero-inflated NB (EM algorithm)
-│   ├── bb.rs             # Beta-binomial GLM for proportions
 │   ├── hurdle.rs         # Hurdle model (binary + truncated NB)
 │   ├── compare.rs        # AIC/BIC model comparison
 │   └── shrink.rs         # Empirical Bayes effect size shrinkage
@@ -131,14 +130,6 @@ Pipeline::new()
     .correct_bh()
     .run(&counts, &metadata)
 
-// Beta-binomial for proportions with overdispersion
-Pipeline::new()
-    .filter_prevalence(0.1)
-    .model_bb("~ group")  // Models counts/library_size as proportions
-    .test_wald("grouptreatment")
-    .correct_bh()
-    .run(&counts, &metadata)
-
 // Hurdle model for sparse data with structural zeros
 Pipeline::new()
     .filter_prevalence(0.1)
@@ -177,9 +168,6 @@ Pipeline::new()
   - Variance components, ICC, BLUPs
 - Negative binomial GLM (NB) - IRLS fitting
 - Zero-inflated negative binomial (ZINB) - EM algorithm
-- Beta-binomial GLM (BB) - for proportions with overdispersion
-  - Mean-dispersion parameterization
-  - Method-of-moments or profile ML dispersion
 - Hurdle model - two-part model for sparse data
   - Binary component (logistic) + count component (truncated NB)
   - All zeros from binary process (vs ZINB mixture)
@@ -187,7 +175,7 @@ Pipeline::new()
 - Effect size shrinkage for all GLM models
 
 **Hypothesis Testing**
-- Wald test (all models including LMM, BB, hurdle components)
+- Wald test (all models including LMM, hurdle components)
 - Likelihood ratio test (NB, ZINB, hurdle)
 - Permutation tests (distribution-free)
 - Benjamini-Hochberg FDR correction
@@ -217,9 +205,6 @@ daa profile-llm -c counts.tsv -m metadata.tsv -g group
 
 # Run LinDA-style analysis
 daa linda -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
-
-# Run beta-binomial analysis (proportions with overdispersion)
-daa bb -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
 
 # Run hurdle model analysis (sparse data with structural zeros)
 daa hurdle -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv

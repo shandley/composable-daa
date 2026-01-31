@@ -1,7 +1,7 @@
 //! Wald test for coefficient significance.
 
 use crate::error::{DaaError, Result};
-use crate::model::{BbFit, HurdleFit, LmFit, LmmFit, NbFit, ZinbFit};
+use crate::model::{HurdleFit, LmFit, LmmFit, NbFit, ZinbFit};
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 
@@ -347,68 +347,6 @@ pub fn test_wald_lmm(fit: &LmmFit, coefficient: &str) -> Result<WaldResult> {
     })
 }
 
-/// Perform Wald test on beta-binomial GLM coefficients.
-///
-/// Tests H0: β = 0 vs H1: β ≠ 0 using the normal distribution (z-test).
-/// For beta-binomial GLMs, the Wald statistic z = β / SE(β) is compared to a standard
-/// normal distribution for large samples.
-///
-/// # Arguments
-/// * `fit` - Beta-binomial model fit results
-/// * `coefficient` - Name of coefficient to test
-///
-/// # Returns
-/// WaldResult containing test statistics and p-values for all features.
-pub fn test_wald_bb(fit: &BbFit, coefficient: &str) -> Result<WaldResult> {
-    let coef_idx = fit.coefficient_index(coefficient).ok_or_else(|| {
-        DaaError::InvalidParameter(format!(
-            "Coefficient '{}' not found. Available: {:?}",
-            coefficient, fit.coefficient_names
-        ))
-    })?;
-
-    let normal = Normal::new(0.0, 1.0).unwrap();
-
-    let results: Vec<WaldResultSingle> = fit
-        .fits
-        .iter()
-        .map(|f| {
-            let estimate = f.coefficients.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let std_error = f.std_errors.get(coef_idx).copied().unwrap_or(f64::NAN);
-            let df = f.df_residual as f64;
-
-            // Calculate z-statistic
-            let statistic = if std_error > 0.0 && !std_error.is_nan() {
-                estimate / std_error
-            } else {
-                f64::NAN
-            };
-
-            // Calculate two-sided p-value using normal distribution
-            let p_value = if !statistic.is_nan() {
-                2.0 * (1.0 - normal.cdf(statistic.abs()))
-            } else {
-                f64::NAN
-            };
-
-            WaldResultSingle {
-                feature_id: f.feature_id.clone(),
-                coefficient: coefficient.to_string(),
-                estimate,
-                std_error,
-                statistic,
-                p_value,
-                df,
-            }
-        })
-        .collect();
-
-    Ok(WaldResult {
-        results,
-        coefficient: coefficient.to_string(),
-    })
-}
-
 /// Perform Wald test on hurdle model count coefficients.
 ///
 /// Tests H0: β = 0 vs H1: β ≠ 0 using the normal distribution (z-test).
@@ -709,68 +647,5 @@ mod tests {
         for result in &wald.results {
             assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
         }
-    }
-
-    #[test]
-    fn test_wald_bb_integration() {
-        use crate::data::CountMatrix;
-        use crate::model::model_bb;
-        use sprs::TriMat;
-
-        // Create test count data with stable library sizes
-        let mut tri_mat = TriMat::new((3, 8));
-
-        // Feature 0: ~10% proportion in both groups (no effect)
-        tri_mat.add_triplet(0, 0, 95);
-        tri_mat.add_triplet(0, 1, 105);
-        tri_mat.add_triplet(0, 2, 98);
-        tri_mat.add_triplet(0, 3, 102);
-        tri_mat.add_triplet(0, 4, 97);
-        tri_mat.add_triplet(0, 5, 103);
-        tri_mat.add_triplet(0, 6, 99);
-        tri_mat.add_triplet(0, 7, 101);
-
-        // Feature 1: Strong effect (5% vs 20%)
-        tri_mat.add_triplet(1, 0, 50);
-        tri_mat.add_triplet(1, 1, 200);
-        tri_mat.add_triplet(1, 2, 52);
-        tri_mat.add_triplet(1, 3, 198);
-        tri_mat.add_triplet(1, 4, 48);
-        tri_mat.add_triplet(1, 5, 202);
-        tri_mat.add_triplet(1, 6, 53);
-        tri_mat.add_triplet(1, 7, 197);
-
-        // Feature 2: "other" to balance library sizes
-        tri_mat.add_triplet(2, 0, 855);
-        tri_mat.add_triplet(2, 1, 695);
-        tri_mat.add_triplet(2, 2, 850);
-        tri_mat.add_triplet(2, 3, 700);
-        tri_mat.add_triplet(2, 4, 855);
-        tri_mat.add_triplet(2, 5, 695);
-        tri_mat.add_triplet(2, 6, 848);
-        tri_mat.add_triplet(2, 7, 702);
-
-        let feature_ids = vec!["no_effect".into(), "strong_effect".into(), "other".into()];
-        let sample_ids: Vec<String> = (1..=8).map(|i| format!("S{}", i)).collect();
-        let counts = CountMatrix::new(tri_mat.to_csr(), feature_ids, sample_ids).unwrap();
-
-        let metadata = create_test_metadata();
-        let formula = Formula::parse("~ group").unwrap();
-        let design = DesignMatrix::from_formula(&metadata, &formula).unwrap();
-
-        let fit = model_bb(&counts, &design).unwrap();
-        let wald = test_wald_bb(&fit, "grouptreatment").unwrap();
-
-        assert_eq!(wald.len(), 3);
-        assert_eq!(wald.coefficient, "grouptreatment");
-
-        // P-values should be valid
-        for result in &wald.results {
-            assert!(result.p_value >= 0.0 && result.p_value <= 1.0);
-        }
-
-        // Strong effect should be significant
-        let strong = wald.get_feature("strong_effect").unwrap();
-        assert!(strong.p_value < 0.05, "Strong effect should be significant, p={}", strong.p_value);
     }
 }

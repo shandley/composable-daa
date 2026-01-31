@@ -100,33 +100,6 @@ enum Commands {
         pseudocount: f64,
     },
 
-    /// Run beta-binomial analysis for proportions with overdispersion
-    Bb {
-        /// Path to count matrix TSV
-        #[arg(short = 'c', long)]
-        counts: PathBuf,
-
-        /// Path to metadata TSV
-        #[arg(short, long)]
-        metadata: PathBuf,
-
-        /// Formula for the model (e.g., "~ group")
-        #[arg(short, long)]
-        formula: String,
-
-        /// Coefficient to test (e.g., "grouptreatment")
-        #[arg(short = 't', long)]
-        test_coef: String,
-
-        /// Output path for results TSV
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prevalence threshold (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        prevalence: f64,
-    },
-
     /// Run hurdle model analysis for sparse count data with structural zeros
     Hurdle {
         /// Path to count matrix TSV
@@ -482,22 +455,6 @@ fn main() {
             pseudocount,
         ),
 
-        Commands::Bb {
-            counts,
-            metadata,
-            formula,
-            test_coef,
-            output,
-            prevalence,
-        } => cmd_bb(
-            &counts,
-            &metadata,
-            &formula,
-            &test_coef,
-            &output,
-            prevalence,
-        ),
-
         Commands::Hurdle {
             counts,
             metadata,
@@ -719,61 +676,6 @@ fn cmd_linda(
         .add_pseudocount(pseudocount)
         .normalize_clr()
         .model_lm(formula)
-        .test_wald(test_coef)
-        .correct_bh()
-        .run(&counts, &metadata)?;
-
-    eprintln!("Writing results to {:?}...", output_path);
-    results.to_tsv(output_path)?;
-
-    eprintln!("Done! {} features tested", results.len());
-    let n_sig = results.significant().len();
-    eprintln!("  {} significant at q < 0.05", n_sig);
-
-    // Print top hits
-    let mut sorted = results.results.clone();
-    sorted.sort_by(|a, b| a.q_value.partial_cmp(&b.q_value).unwrap());
-    if !sorted.is_empty() {
-        eprintln!("\nTop 5 hits:");
-        for r in sorted.iter().take(5) {
-            eprintln!(
-                "  {}: estimate={:.3}, q={:.4}",
-                r.feature_id, r.estimate, r.q_value
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// Run beta-binomial analysis for proportions with overdispersion
-fn cmd_bb(
-    counts_path: &PathBuf,
-    metadata_path: &PathBuf,
-    formula: &str,
-    test_coef: &str,
-    output_path: &PathBuf,
-    prevalence: f64,
-) -> Result<()> {
-    eprintln!("Loading data...");
-    let counts = CountMatrix::from_tsv(counts_path)?;
-    let metadata = Metadata::from_tsv(metadata_path)?;
-
-    eprintln!(
-        "Loaded {} features x {} samples",
-        counts.n_features(),
-        counts.n_samples()
-    );
-
-    eprintln!("Running beta-binomial analysis...");
-    eprintln!("  Formula: {}", formula);
-    eprintln!("  Testing: {}", test_coef);
-    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
-
-    let results = Pipeline::new()
-        .name("BetaBinomial")
-        .filter_prevalence(prevalence)
-        .model_bb(formula)
         .test_wald(test_coef)
         .correct_bh()
         .run(&counts, &metadata)?;
