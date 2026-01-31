@@ -305,17 +305,20 @@ daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --quiet
 
 ### Longitudinal & Repeated Measures
 
-The `recommend` command auto-detects longitudinal study designs:
+The `recommend` command auto-detects longitudinal study designs and runs LMM automatically:
 
 ```bash
-# If metadata contains subject_id + timepoint columns:
-# → Auto-generates LMM with random intercept: ~ group + timepoint + (1 | subject_id)
+# Longitudinal: metadata contains subject_id + timepoint columns
+# → Auto-runs LMM with: ~ group + timepoint + (1 | subject_id)
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
 
-# If metadata contains subject_id only (repeated measures):
-# → Auto-generates LMM: ~ group + (1 | subject_id)
+# Repeated measures: metadata contains subject_id only
+# → Auto-runs LMM with: ~ group + (1 | subject_id)
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
 
-# For longitudinal data, --run will warn you to use --yaml instead
+# For custom formulas (interactions, random slopes), use --yaml:
 daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --yaml -o pipeline.yaml
+# Edit pipeline.yaml to add: ~ group * timepoint + (1 + timepoint | subject_id)
 daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
 ```
 

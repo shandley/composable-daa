@@ -1535,30 +1535,6 @@ fn cmd_recommend(
         )
     };
 
-    // For longitudinal/repeated measures, --run is not supported (needs LMM via YAML)
-    if (is_longitudinal || is_repeated_measures) && run {
-        eprintln!("ERROR: Longitudinal/repeated measures design detected.");
-        eprintln!();
-        if is_longitudinal {
-            eprintln!("  Detected: subject column '{}', time column '{}'",
-                     subject_column.unwrap(), time_column.unwrap());
-        } else {
-            eprintln!("  Detected: subject column '{}' (repeated measures)",
-                     subject_column.unwrap());
-        }
-        eprintln!();
-        eprintln!("This requires a Linear Mixed Model (LMM) which is not yet supported");
-        eprintln!("with --run. Please use --yaml to generate a pipeline config:");
-        eprintln!();
-        eprintln!("  daa recommend -c {} -m {} -g {} -t {} --yaml -o pipeline.yaml",
-                 counts_path.display(), metadata_path.display(), group, target);
-        eprintln!();
-        eprintln!("Then run with:");
-        eprintln!("  daa run -c {} -m {} --config pipeline.yaml -o results.tsv",
-                 counts_path.display(), metadata_path.display());
-        return Ok(());
-    }
-
     // Build the coefficient name
     let test_coef = format!("{}{}", group, target);
 
@@ -1641,6 +1617,15 @@ fn cmd_recommend(
         println!("Samples:         {}", n_samples);
         println!("Sparsity:        {:.1}%", sparsity * 100.0);
         println!("Min group size:  {}", min_group_size);
+        if is_longitudinal || is_repeated_measures {
+            println!("Study design:    {}", if is_longitudinal { "Longitudinal" } else { "Repeated measures" });
+            if let Some(subj) = subject_column {
+                println!("  Subject column: {}", subj);
+            }
+            if let Some(time) = time_column {
+                println!("  Time column:    {}", time);
+            }
+        }
         println!();
         println!("=== Recommendation ===");
         println!("Method:    {}", method.to_uppercase());
@@ -1695,6 +1680,17 @@ fn cmd_recommend(
                     .correct_bh()
                     .run(&counts, &metadata)?
             }
+            "lmm" => {
+                Pipeline::new()
+                    .name("LMM")
+                    .filter_prevalence(0.1)
+                    .add_pseudocount(0.5)
+                    .normalize_clr()
+                    .model_lmm(&formula)
+                    .test_wald(&test_coef)
+                    .correct_bh()
+                    .run(&counts, &metadata)?
+            }
             "linda" | _ => {
                 Pipeline::new()
                     .name("LinDA")
@@ -1720,9 +1716,12 @@ fn cmd_recommend(
         if !quiet {
             println!();
             println!("=== Interpretation Guide ===");
-            if is_linda {
-                println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
+            if method == "linda" || method == "lmm" {
+                println!("  - Use q < {} threshold", threshold);
                 println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
+                if method == "lmm" {
+                    println!("  - Random effects account for within-subject correlation");
+                }
             } else {
                 println!("  - Use q < 0.05 threshold");
                 println!("  - Effect sizes are in log scale; exp(estimate) = fold change");
@@ -1735,8 +1734,8 @@ fn cmd_recommend(
             println!("{}", cmd);
             println!();
             println!("After running, interpret results:");
-            if method == "linda" {
-                println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
+            if method == "linda" || method == "lmm" {
+                println!("  - Use q < {} threshold", threshold);
                 println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
             } else {
                 println!("  - Use q < 0.05 threshold");
