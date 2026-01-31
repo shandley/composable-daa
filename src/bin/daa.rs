@@ -69,68 +69,6 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Run a quick LinDA-style analysis
-    Linda {
-        /// Path to count matrix TSV
-        #[arg(short = 'c', long)]
-        counts: PathBuf,
-
-        /// Path to metadata TSV
-        #[arg(short, long)]
-        metadata: PathBuf,
-
-        /// Formula for the model (e.g., "~ group")
-        #[arg(short, long)]
-        formula: String,
-
-        /// Coefficient to test (e.g., "grouptreatment")
-        #[arg(short = 't', long)]
-        test_coef: String,
-
-        /// Output path for results TSV
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prevalence threshold (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        prevalence: f64,
-
-        /// Pseudocount value (default: 0.5)
-        #[arg(long, default_value = "0.5")]
-        pseudocount: f64,
-    },
-
-    /// Run hurdle model analysis for sparse count data with structural zeros
-    Hurdle {
-        /// Path to count matrix TSV
-        #[arg(short = 'c', long)]
-        counts: PathBuf,
-
-        /// Path to metadata TSV
-        #[arg(short, long)]
-        metadata: PathBuf,
-
-        /// Formula for the model (e.g., "~ group")
-        #[arg(short, long)]
-        formula: String,
-
-        /// Coefficient to test (e.g., "grouptreatment")
-        #[arg(short = 't', long)]
-        test_coef: String,
-
-        /// Output path for results TSV
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prevalence threshold (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        prevalence: f64,
-
-        /// Component to test: count (default) or binary
-        #[arg(long, default_value = "count")]
-        component: String,
-    },
-
     /// Run analysis with permutation tests (non-parametric, distribution-free)
     Permutation {
         /// Path to count matrix TSV
@@ -425,7 +363,7 @@ enum Commands {
         clear_cache: bool,
     },
 
-    /// Recommend an analysis method based on data profile
+    /// Recommend and optionally run analysis based on data profile
     Recommend {
         /// Path to count matrix TSV
         #[arg(short = 'c', long)]
@@ -443,67 +381,17 @@ enum Commands {
         #[arg(short = 't', long)]
         target: String,
 
-        /// Output results file path (optional - if provided, will output a ready-to-run command)
+        /// Output results file path
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Just print the command, don't explain
+        /// Run the recommended analysis (not just print recommendation)
+        #[arg(long)]
+        run: bool,
+
+        /// Just print the pipeline config, no explanation
         #[arg(long)]
         quiet: bool,
-    },
-
-    /// Run ZINB (Zero-Inflated Negative Binomial) analysis
-    Zinb {
-        /// Path to count matrix TSV
-        #[arg(short = 'c', long)]
-        counts: PathBuf,
-
-        /// Path to metadata TSV
-        #[arg(short, long)]
-        metadata: PathBuf,
-
-        /// Formula for the model (e.g., "~ group")
-        #[arg(short, long)]
-        formula: String,
-
-        /// Coefficient to test (e.g., "grouptreatment")
-        #[arg(short = 't', long)]
-        test_coef: String,
-
-        /// Output path for results TSV
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prevalence threshold (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        prevalence: f64,
-    },
-
-    /// Run Negative Binomial GLM analysis
-    Nb {
-        /// Path to count matrix TSV
-        #[arg(short = 'c', long)]
-        counts: PathBuf,
-
-        /// Path to metadata TSV
-        #[arg(short, long)]
-        metadata: PathBuf,
-
-        /// Formula for the model (e.g., "~ group")
-        #[arg(short, long)]
-        formula: String,
-
-        /// Coefficient to test (e.g., "grouptreatment")
-        #[arg(short = 't', long)]
-        test_coef: String,
-
-        /// Output path for results TSV
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Prevalence threshold (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        prevalence: f64,
     },
 }
 
@@ -517,42 +405,6 @@ fn main() {
             metadata,
             output,
         } => cmd_run(&config, &counts, &metadata, &output),
-
-        Commands::Linda {
-            counts,
-            metadata,
-            formula,
-            test_coef,
-            output,
-            prevalence,
-            pseudocount,
-        } => cmd_linda(
-            &counts,
-            &metadata,
-            &formula,
-            &test_coef,
-            &output,
-            prevalence,
-            pseudocount,
-        ),
-
-        Commands::Hurdle {
-            counts,
-            metadata,
-            formula,
-            test_coef,
-            output,
-            prevalence,
-            component,
-        } => cmd_hurdle(
-            &counts,
-            &metadata,
-            &formula,
-            &test_coef,
-            &output,
-            prevalence,
-            &component,
-        ),
 
         Commands::Permutation {
             counts,
@@ -690,26 +542,9 @@ fn main() {
             group,
             target,
             output,
+            run,
             quiet,
-        } => cmd_recommend(&counts, &metadata, &group, &target, output.as_ref(), quiet),
-
-        Commands::Zinb {
-            counts,
-            metadata,
-            formula,
-            test_coef,
-            output,
-            prevalence,
-        } => cmd_zinb(&counts, &metadata, &formula, &test_coef, &output, prevalence),
-
-        Commands::Nb {
-            counts,
-            metadata,
-            formula,
-            test_coef,
-            output,
-            prevalence,
-        } => cmd_nb(&counts, &metadata, &formula, &test_coef, &output, prevalence),
+        } => cmd_recommend(&counts, &metadata, &group, &target, output.as_ref(), run, quiet),
     };
 
     if let Err(e) = result {
@@ -749,49 +584,6 @@ fn cmd_run(
     eprintln!("Done! {} features tested", results.len());
     let n_sig = results.significant().len();
     eprintln!("  {} significant at q < 0.05", n_sig);
-
-    Ok(())
-}
-
-/// Run a quick LinDA analysis
-fn cmd_linda(
-    counts_path: &PathBuf,
-    metadata_path: &PathBuf,
-    formula: &str,
-    test_coef: &str,
-    output_path: &PathBuf,
-    prevalence: f64,
-    pseudocount: f64,
-) -> Result<()> {
-    eprintln!("Loading data...");
-    let counts = CountMatrix::from_tsv(counts_path)?;
-    let metadata = Metadata::from_tsv(metadata_path)?;
-
-    eprintln!(
-        "Loaded {} features x {} samples",
-        counts.n_features(),
-        counts.n_samples()
-    );
-
-    eprintln!("Running LinDA analysis...");
-    eprintln!("  Formula: {}", formula);
-    eprintln!("  Testing: {}", test_coef);
-    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
-
-    let results = Pipeline::new()
-        .name("LinDA")
-        .filter_prevalence(prevalence)
-        .add_pseudocount(pseudocount)
-        .normalize_clr()
-        .model_lm(formula)
-        .test_wald(test_coef)
-        .correct_bh()
-        .run(&counts, &metadata)?;
-
-    eprintln!("Writing results to {:?}...", output_path);
-    results.to_tsv(output_path)?;
-
-    print_results_summary(&results, false);
 
     Ok(())
 }
@@ -855,56 +647,6 @@ fn print_results_summary(results: &composable_daa::data::DaResultSet, show_fold_
         eprintln!("  * = q < 0.05, . = q < 0.10");
     }
 }
-
-/// Run hurdle model analysis for sparse count data
-fn cmd_hurdle(
-    counts_path: &PathBuf,
-    metadata_path: &PathBuf,
-    formula: &str,
-    test_coef: &str,
-    output_path: &PathBuf,
-    prevalence: f64,
-    component: &str,
-) -> Result<()> {
-    eprintln!("Loading data...");
-    let counts = CountMatrix::from_tsv(counts_path)?;
-    let metadata = Metadata::from_tsv(metadata_path)?;
-
-    eprintln!(
-        "Loaded {} features x {} samples",
-        counts.n_features(),
-        counts.n_samples()
-    );
-
-    let component_name = if component == "binary" { "binary (presence/absence)" } else { "count (abundance)" };
-    eprintln!("Running hurdle model analysis...");
-    eprintln!("  Formula: {}", formula);
-    eprintln!("  Testing: {} ({})", test_coef, component_name);
-    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
-
-    // For now, the pipeline uses count component by default
-    // We'll need to add pipeline support for component selection in a follow-up
-    if component == "binary" {
-        eprintln!("  Note: Binary component testing via CLI requires direct API usage.");
-        eprintln!("        Pipeline currently tests count component by default.");
-    }
-
-    let results = Pipeline::new()
-        .name("Hurdle")
-        .filter_prevalence(prevalence)
-        .model_hurdle(formula)
-        .test_wald(test_coef)
-        .correct_bh()
-        .run(&counts, &metadata)?;
-
-    eprintln!("Writing results to {:?}...", output_path);
-    results.to_tsv(output_path)?;
-
-    print_results_summary(&results, false);
-
-    Ok(())
-}
-
 /// Run analysis with permutation tests
 fn cmd_permutation(
     counts_path: &PathBuf,
@@ -1659,6 +1401,7 @@ fn cmd_recommend(
     group: &str,
     target: &str,
     output_path: Option<&PathBuf>,
+    run: bool,
     quiet: bool,
 ) -> Result<()> {
     // Load data
@@ -1700,23 +1443,26 @@ fn cmd_recommend(
 
     // Determine output file path
     let output_file = output_path
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| format!("results_{}.tsv", method));
+        .map(|p| p.clone())
+        .unwrap_or_else(|| PathBuf::from(format!("results_{}.tsv", method)));
 
-    // Build the command
+    // Build the command for display
     let cmd = format!(
-        "daa {} -c {} -m {} -f \"{}\" -t {} -o {}",
-        method,
+        "daa recommend -c {} -m {} -g {} -t {} -o {} --run",
         counts_path.display(),
         metadata_path.display(),
-        formula,
-        test_coef,
-        output_file
+        group,
+        target,
+        output_file.display()
     );
 
-    if quiet {
+    if quiet && !run {
+        // Just print the command
         println!("{}", cmd);
-    } else {
+        return Ok(());
+    }
+
+    if !quiet {
         println!();
         println!("=== Data Summary ===");
         println!("Features:        {}", n_features);
@@ -1747,99 +1493,85 @@ fn cmd_recommend(
                 println!();
             }
         }
-
-        println!("=== Ready-to-run Command ===");
-        println!("{}", cmd);
-        println!();
-        println!("After running, interpret results:");
-        if method == "linda" {
-            println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
-            println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
-        } else {
-            println!("  - Use q < 0.05 threshold");
-            println!("  - Effect sizes are in log scale; exp(estimate) = fold change");
-        }
     }
 
-    Ok(())
-}
+    // If run flag is set, execute the analysis
+    if run {
+        if !quiet {
+            println!("=== Running {} Analysis ===", method.to_uppercase());
+            eprintln!("  Formula: {}", formula);
+            eprintln!("  Testing: {}", test_coef);
+        }
 
-/// Run ZINB analysis
-fn cmd_zinb(
-    counts_path: &PathBuf,
-    metadata_path: &PathBuf,
-    formula: &str,
-    test_coef: &str,
-    output_path: &PathBuf,
-    prevalence: f64,
-) -> Result<()> {
-    eprintln!("Loading data...");
-    let counts = CountMatrix::from_tsv(counts_path)?;
-    let metadata = Metadata::from_tsv(metadata_path)?;
+        // Build and run the appropriate pipeline
+        let results = match method {
+            "hurdle" => {
+                Pipeline::new()
+                    .name("Hurdle")
+                    .filter_prevalence(0.1)
+                    .model_hurdle(&formula)
+                    .test_wald(&test_coef)
+                    .correct_bh()
+                    .run(&counts, &metadata)?
+            }
+            "zinb" => {
+                Pipeline::new()
+                    .name("ZINB")
+                    .filter_prevalence(0.1)
+                    .model_zinb(&formula)
+                    .test_wald(&test_coef)
+                    .correct_bh()
+                    .run(&counts, &metadata)?
+            }
+            "linda" | _ => {
+                Pipeline::new()
+                    .name("LinDA")
+                    .filter_prevalence(0.1)
+                    .add_pseudocount(0.5)
+                    .normalize_clr()
+                    .model_lm(&formula)
+                    .test_wald(&test_coef)
+                    .correct_bh()
+                    .run(&counts, &metadata)?
+            }
+        };
 
-    eprintln!(
-        "Loaded {} features x {} samples",
-        counts.n_features(),
-        counts.n_samples()
-    );
+        if !quiet {
+            eprintln!("Writing results to {:?}...", output_file);
+        }
+        results.to_tsv(&output_file)?;
 
-    eprintln!("Running ZINB analysis...");
-    eprintln!("  Formula: {}", formula);
-    eprintln!("  Testing: {}", test_coef);
-    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
+        // Print summary
+        let is_linda = method == "linda";
+        print_results_summary(&results, !is_linda);
 
-    let results = Pipeline::new()
-        .name("ZINB")
-        .filter_prevalence(prevalence)
-        .model_zinb(formula)
-        .test_wald(test_coef)
-        .correct_bh()
-        .run(&counts, &metadata)?;
-
-    eprintln!("Writing results to {:?}...", output_path);
-    results.to_tsv(output_path)?;
-
-    print_results_summary(&results, true);
-
-    Ok(())
-}
-
-/// Run Negative Binomial GLM analysis
-fn cmd_nb(
-    counts_path: &PathBuf,
-    metadata_path: &PathBuf,
-    formula: &str,
-    test_coef: &str,
-    output_path: &PathBuf,
-    prevalence: f64,
-) -> Result<()> {
-    eprintln!("Loading data...");
-    let counts = CountMatrix::from_tsv(counts_path)?;
-    let metadata = Metadata::from_tsv(metadata_path)?;
-
-    eprintln!(
-        "Loaded {} features x {} samples",
-        counts.n_features(),
-        counts.n_samples()
-    );
-
-    eprintln!("Running Negative Binomial GLM analysis...");
-    eprintln!("  Formula: {}", formula);
-    eprintln!("  Testing: {}", test_coef);
-    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
-
-    let results = Pipeline::new()
-        .name("NB")
-        .filter_prevalence(prevalence)
-        .model_nb(formula)
-        .test_wald(test_coef)
-        .correct_bh()
-        .run(&counts, &metadata)?;
-
-    eprintln!("Writing results to {:?}...", output_path);
-    results.to_tsv(output_path)?;
-
-    print_results_summary(&results, true);
+        if !quiet {
+            println!();
+            println!("=== Interpretation Guide ===");
+            if is_linda {
+                println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
+                println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
+            } else {
+                println!("  - Use q < 0.05 threshold");
+                println!("  - Effect sizes are in log scale; exp(estimate) = fold change");
+            }
+        }
+    } else {
+        // Just print the recommendation
+        if !quiet {
+            println!("=== Ready-to-run Command ===");
+            println!("{}", cmd);
+            println!();
+            println!("After running, interpret results:");
+            if method == "linda" {
+                println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
+                println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
+            } else {
+                println!("  - Use q < 0.05 threshold");
+                println!("  - Effect sizes are in log scale; exp(estimate) = fold change");
+            }
+        }
+    }
 
     Ok(())
 }

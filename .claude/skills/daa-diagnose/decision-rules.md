@@ -176,19 +176,25 @@ Has subject/patient column?
 
 ## Formula Construction
 
+For cross-sectional studies, use `daa recommend --run` which auto-selects the method:
+```bash
+daa recommend -c counts.tsv -m metadata.tsv -g group -t target --run -o results.tsv
+```
+
+For complex designs (longitudinal, batch effects), use `daa run` with a YAML config.
+
 ### Basic Two-Group Comparison
 ```
 Formula: ~ group
 Test coefficient: group{treatment_level}
-Example: daa zinb -f "~ treatment" -t treatmentdisease
+Command: daa recommend -c counts.tsv -m metadata.tsv -g treatment -t disease --run
 ```
 
 ### With Continuous Covariates
 ```
 Formula: ~ group + age + bmi
 Test coefficient: group{treatment_level}
-Example: daa zinb -f "~ treatment + age + bmi" -t treatmentdisease
-
+Note: Use daa run with YAML config for custom formulas with covariates
 Note: Continuous covariates are centered automatically
 ```
 
@@ -196,8 +202,7 @@ Note: Continuous covariates are centered automatically
 ```
 Formula: ~ group + sex + batch
 Test coefficient: group{treatment_level}
-Example: daa zinb -f "~ treatment + sex + batch" -t treatmentdisease
-
+Note: Use daa run with YAML config for custom formulas with covariates
 Note: First level is reference (alphabetically)
 ```
 
@@ -206,7 +211,7 @@ Note: First level is reference (alphabetically)
 Design: Compare groups, adjusted for time
 Formula: ~ group + time + (1 | subject)
 Test coefficient: group{treatment_level}
-Example: daa linda -f "~ treatment + timepoint + (1 | subject_id)" -t treatmentdisease
+Note: Use daa run with YAML config for longitudinal designs
 
 Interpretation: Average difference between groups across all timepoints
 ```
@@ -216,7 +221,7 @@ Interpretation: Average difference between groups across all timepoints
 Design: Do groups change differently over time?
 Formula: ~ group * time + (1 | subject)
 Test coefficient: group{treatment_level}:time{level}
-Example: daa linda -f "~ treatment * timepoint + (1 | subject_id)" -t treatmentdisease:timepointweek4
+Note: Use daa run with YAML config for interaction terms
 
 Interpretation: Difference in change from baseline between groups
 ```
@@ -225,8 +230,7 @@ Interpretation: Difference in change from baseline between groups
 ```
 Design: Allow individual-specific time trajectories
 Formula: ~ group * time + (1 + time | subject)
-Example: daa linda -f "~ treatment * timepoint + (1 + timepoint | subject_id)" -t treatmentdisease
-
+Note: Use daa run with YAML config for random slopes
 Note: Requires sufficient data (>5 timepoints recommended)
 ```
 
@@ -234,8 +238,7 @@ Note: Requires sufficient data (>5 timepoints recommended)
 ```
 Design: 2-5 batches
 Formula: ~ group + batch
-Example: daa zinb -f "~ treatment + batch" -t treatmentdisease
-
+Note: Use daa run with YAML config to include batch as covariate
 Note: Fixed effect estimates batch-specific intercepts
 ```
 
@@ -243,8 +246,7 @@ Note: Fixed effect estimates batch-specific intercepts
 ```
 Design: >5 batches or batches are nuisance
 Formula: ~ group + (1 | batch)
-Example: daa linda -f "~ treatment + (1 | batch)" -t treatmentdisease
-
+Note: Use daa run with YAML config for random batch effects
 Note: Random effect pools information across batches
 ```
 

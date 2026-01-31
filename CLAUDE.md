@@ -203,11 +203,11 @@ daa profile -c counts.tsv
 # Generate LLM-friendly profile for AI-assisted pipeline design
 daa profile-llm -c counts.tsv -m metadata.tsv -g group
 
-# Run LinDA-style analysis
-daa linda -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+# Get method recommendation based on data profile
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment
 
-# Run hurdle model analysis (sparse data with structural zeros)
-daa hurdle -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
+# Run the recommended analysis automatically
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
 
 # Run with permutation tests (non-parametric)
 daa permutation -c counts.tsv -m metadata.tsv -f "~ group" -t grouptreatment -o results.tsv
@@ -264,12 +264,8 @@ daa fetch -d ravel -o ./ravel_data/
 |---------|---------|
 | `daa profile` | Basic data profiling |
 | `daa profile-llm` | Structured profiling for AI analysis |
-| `daa linda` | LinDA-style analysis (CLR + linear model) |
-| `daa zinb` | Zero-inflated negative binomial |
-| `daa hurdle` | Hurdle model for sparse data |
-| `daa nb` | Negative binomial GLM |
+| `daa recommend` | **Profile data, recommend method, optionally execute with `--run`** |
 | `daa permutation` | Non-parametric permutation tests |
-| `daa recommend` | **Get method recommendation with ready-to-run command** |
 | `daa validate` | Spike-in validation |
 | `daa stress` | Compositional stress testing |
 | `daa optimize-prevalence` | Find optimal prevalence threshold |
@@ -280,24 +276,25 @@ daa fetch -d ravel -o ./ravel_data/
 ```
 User asks for analysis
        ↓
-daa recommend (or /daa-diagnose for detailed profile)
+daa recommend --run (profiles data, selects method, executes)
        ↓
-Run recommended `daa` command
-       ↓
-/daa-interpret (or /daa-guide) to interpret results
+/daa-interpret to understand results
        ↓
 Offer validation with `daa validate`
 ```
 
 ### Quick Start
 
-For users who want fast recommendations without detailed profiling:
+For users who want fast analysis:
 
 ```bash
-# Get recommendation with ready-to-run command
+# Profile data and run recommended analysis in one step
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o results.tsv
+
+# Just get recommendation (no execution)
 daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment
 
-# Or in quiet mode (just the command)
+# Quiet mode - just the command
 daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --quiet
 ```
 

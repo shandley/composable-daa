@@ -180,7 +180,7 @@ Rationale: {why this method based on data characteristics}
 {If covariates: explain why included}
 
 ```bash
-daa {method} -c {counts} -m {metadata} -f "{formula}" -t {coefficient} -o results_{method}.tsv
+daa recommend -c {counts} -m {metadata} -g {group_column} -t {target_level} --run -o results.tsv
 ```
 
 ### Threshold: {q_threshold}
@@ -188,9 +188,9 @@ daa {method} -c {counts} -m {metadata} -f "{formula}" -t {coefficient} -o result
 {If LinDA: explain q < 0.10 requirement}
 
 ### Secondary Validation (Optional)
-Run a second method to validate top hits:
+Run spike-in validation to empirically test the method on your data:
 ```bash
-daa {validation_method} -c {counts} -m {metadata} -f "{formula}" -t {coefficient} -o results_{validation}.tsv
+daa validate -c {counts} -m {metadata} -g {group_column} -t {target_level} -f "{formula}" --test-coef {coefficient}
 ```
 
 ## Warnings
@@ -250,9 +250,8 @@ See [decision-rules.md](decision-rules.md) for complete decision tree and benchm
    - treatment * timepoint: interaction (different trajectories?)
    - (1 | subject_id): random intercept per subject
 
-   daa linda -c counts.tsv -m metadata.tsv \
-     -f "~ treatment * timepoint + (1 | subject_id)" \
-     -t treatmentdisease -o results_lmm.tsv
+   Note: For longitudinal designs with random effects, use daa run with
+   a YAML pipeline config, as recommend doesn't yet auto-detect longitudinal designs.
    ```
 6. Warns: "Use LMM to avoid inflated Type I error from non-independent samples"
 
