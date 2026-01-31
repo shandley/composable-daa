@@ -1,0 +1,10 @@
+name: nb-fpr-test
+description: Negative binomial model for FPR validation
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelNB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

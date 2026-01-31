@@ -1,0 +1,12 @@
+name: extreme_sparse
+n_features: 200
+n_samples_per_group: 20
+sparsity: 0.95
+dominance: 0.8
+library_size_cv: 0.8
+mean_library_size: 10000
+group_library_ratio: 1.0
+n_differential: 5
+effect_size: 2.0
+group_specific_fraction: 0.0
+seed: 42

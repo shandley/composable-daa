@@ -1,0 +1,10 @@
+name: zinb-fpr-test
+description: Zero-inflated negative binomial for FPR validation
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !ModelZINB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

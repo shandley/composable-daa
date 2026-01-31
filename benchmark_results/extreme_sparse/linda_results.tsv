@@ -1,0 +1,13 @@
+feature_id	coefficient	estimate	std_error	statistic	p_value	q_value	prevalence	mean_abundance	prevalence_tier	confidence
+Feature_0000	grouptreatment	-0.557476	0.659535	-0.8453	4.03e-1	8.25e-1	0.1000	0.2954	low	not_significant
+Feature_0001	grouptreatment	0.623408	0.672573	0.9269	3.60e-1	8.25e-1	0.1000	0.3451	low	not_significant
+Feature_0002	grouptreatment	-0.418532	0.700608	-0.5974	5.54e-1	8.96e-1	0.1250	0.4640	low	not_significant
+Feature_0015	grouptreatment	0.035691	0.355465	0.1004	9.21e-1	9.35e-1	0.2000	0.1760	low	not_significant
+Feature_0017	grouptreatment	-0.029025	0.295466	-0.0982	9.22e-1	9.35e-1	0.1250	-0.0681	low	not_significant
+Feature_0020	grouptreatment	0.274619	0.242464	1.1326	2.64e-1	8.25e-1	0.1000	-0.1553	low	not_significant
+Feature_0024	grouptreatment	-0.233889	0.282240	-0.8287	4.12e-1	8.25e-1	0.1000	-0.1405	low	not_significant
+Feature_0028	grouptreatment	0.155341	0.291346	0.5332	5.97e-1	8.96e-1	0.1250	-0.0795	low	not_significant
+Feature_0039	grouptreatment	0.425440	0.243944	1.7440	8.92e-2	8.25e-1	0.1000	-0.1348	low	not_significant
+Feature_0046	grouptreatment	-0.021388	0.259940	-0.0823	9.35e-1	9.35e-1	0.1000	-0.1679	low	not_significant
+Feature_0086	grouptreatment	-0.228544	0.162711	-1.4046	1.68e-1	8.25e-1	0.1000	-0.2714	low	not_significant
+Feature_0094	grouptreatment	-0.025646	0.133869	-0.1916	8.49e-1	9.35e-1	0.1000	-0.2630	low	not_significant

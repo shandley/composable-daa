@@ -1,0 +1,13 @@
+name: lmm-fpr-test
+description: Linear mixed model for FPR validation on longitudinal data
+steps:
+- !FilterPrevalence
+  threshold: 0.1
+- !AddPseudocount
+  value: 0.5
+- !NormalizeCLR
+- !ModelLMM
+  formula: "~ group + time + (1 | subject)"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

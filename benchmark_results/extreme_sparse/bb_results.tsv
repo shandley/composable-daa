@@ -1,0 +1,13 @@
+feature_id	coefficient	estimate	std_error	statistic	p_value	q_value	prevalence	mean_abundance	prevalence_tier	confidence
+Feature_0000	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0999	low	not_significant
+Feature_0001	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0995	low	not_significant
+Feature_0002	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1250	0.1236	low	not_significant
+Feature_0015	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.2000	0.0718	low	not_significant
+Feature_0017	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1250	0.0664	low	not_significant
+Feature_0020	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0413	low	not_significant
+Feature_0024	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0612	low	not_significant
+Feature_0028	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1250	0.0541	low	not_significant
+Feature_0039	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0422	low	not_significant
+Feature_0046	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0587	low	not_significant
+Feature_0086	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0750	low	not_significant
+Feature_0094	grouptreatment	0.000000	NaN	NaN	NaN	1.00e0	0.1000	0.0063	low	not_significant
