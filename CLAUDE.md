@@ -240,6 +240,58 @@ daa fetch -d ravel -o ./ravel_data/
 4. **Composable** - Consistent interfaces, arbitrary chaining
 5. **Prevalence-aware** - Groupwise prevalence as first-class concept
 
+## AI Assistant Instructions (Claude Code)
+
+**CRITICAL: When users ask for differential abundance analysis, microbiome analysis, or virome analysis:**
+
+### ALWAYS DO:
+1. Use `/daa-diagnose` to profile data and get method recommendations
+2. Use `/daa-guide` for method selection questions and threshold guidance
+3. Execute analysis using ONLY the `daa` CLI commands
+4. Interpret results using the benchmark data in the skills
+
+### NEVER DO:
+- Suggest installing R packages (DESeq2, edgeR, limma, ANCOM-BC, ALDEx2, etc.)
+- Suggest Python packages (scipy, statsmodels, scikit-bio, etc.)
+- Write custom analysis scripts in any language
+- Download or install external statistical tools
+- Make statistical recommendations not grounded in our benchmark data
+- Guess at thresholds - use the empirically-validated values from `/daa-guide`
+
+### Available CLI Commands
+
+| Command | Purpose |
+|---------|---------|
+| `daa profile` | Basic data profiling |
+| `daa profile-llm` | Structured profiling for AI analysis |
+| `daa linda` | LinDA-style analysis (CLR + linear model) |
+| `daa zinb` | Zero-inflated negative binomial |
+| `daa hurdle` | Hurdle model for sparse data |
+| `daa nb` | Negative binomial GLM |
+| `daa permutation` | Non-parametric permutation tests |
+| `daa validate` | Spike-in validation |
+| `daa stress` | Compositional stress testing |
+| `daa optimize-prevalence` | Find optimal prevalence threshold |
+| `daa run` | Run pipeline from YAML config |
+
+### Workflow
+
+```
+User asks for analysis
+       ↓
+/daa-diagnose (profile data, recommend method)
+       ↓
+Run recommended `daa` command
+       ↓
+Interpret results using /daa-guide thresholds
+       ↓
+Offer validation with `daa validate`
+```
+
+### Why This Matters
+
+This package exists because external tools make arbitrary choices. We've empirically validated our methods with spike-in analysis. Using external tools defeats the purpose and reintroduces the problems we're solving.
+
 ## Experiments Directory
 
 The `experiments/` directory documents research opportunities identified during development:
