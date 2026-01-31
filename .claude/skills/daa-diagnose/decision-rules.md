@@ -143,6 +143,37 @@ START
 | Sparsity differs by group | "Group-specific sparsity" | Use groupwise prevalence filter |
 | <50 features pass filter | "Few testable features" | Consider relaxing filter |
 
+## Study Design Detection
+
+### Column Name Patterns
+
+| Pattern | Indicates | Action |
+|---------|-----------|--------|
+| `subject`, `patient`, `individual`, `participant_id` | Repeated measures | Use LMM with random intercept |
+| `time`, `timepoint`, `visit`, `day`, `week` | Longitudinal | Include time in model |
+| `batch`, `run`, `plate`, `lane`, `sequencing_batch` | Technical batch | Include as covariate or random effect |
+| `site`, `location`, `center` | Multi-site study | Include as random effect |
+| `age`, `bmi`, `weight` | Continuous covariate | Consider adjusting |
+| `sex`, `gender` | Categorical covariate | Consider adjusting |
+
+### Study Design Decision Tree
+
+```
+Has subject/patient column?
+  │
+  YES ──► Are there multiple samples per subject?
+  │         │
+  │         YES ──► MUST use LMM (samples not independent)
+  │         │       │
+  │         │       └─► Has time column?
+  │         │             YES ──► ~ group * time + (1 | subject)
+  │         │             NO  ──► ~ group + (1 | subject)
+  │         │
+  │         NO ──► Standard cross-sectional (no random effects needed)
+  │
+  NO ──► Standard cross-sectional design
+```
+
 ## Formula Construction
 
 ### Basic Two-Group Comparison
@@ -152,19 +183,109 @@ Test coefficient: group{treatment_level}
 Example: daa zinb -f "~ treatment" -t treatmentdisease
 ```
 
-### With Covariates
+### With Continuous Covariates
 ```
-Formula: ~ group + age + sex
+Formula: ~ group + age + bmi
 Test coefficient: group{treatment_level}
-Example: daa zinb -f "~ treatment + age + sex" -t treatmentdisease
+Example: daa zinb -f "~ treatment + age + bmi" -t treatmentdisease
+
+Note: Continuous covariates are centered automatically
 ```
 
-### Longitudinal Data
+### With Categorical Covariates
 ```
+Formula: ~ group + sex + batch
+Test coefficient: group{treatment_level}
+Example: daa zinb -f "~ treatment + sex + batch" -t treatmentdisease
+
+Note: First level is reference (alphabetically)
+```
+
+### Longitudinal - Main Effect Only
+```
+Design: Compare groups, adjusted for time
 Formula: ~ group + time + (1 | subject)
 Test coefficient: group{treatment_level}
-Example: daa lmm -f "~ treatment + timepoint + (1 | subject_id)" -t treatmentdisease
+Example: daa linda -f "~ treatment + timepoint + (1 | subject_id)" -t treatmentdisease
+
+Interpretation: Average difference between groups across all timepoints
 ```
+
+### Longitudinal - Interaction (Different Trajectories)
+```
+Design: Do groups change differently over time?
+Formula: ~ group * time + (1 | subject)
+Test coefficient: group{treatment_level}:time{level}
+Example: daa linda -f "~ treatment * timepoint + (1 | subject_id)" -t treatmentdisease:timepointweek4
+
+Interpretation: Difference in change from baseline between groups
+```
+
+### Longitudinal - Random Slopes
+```
+Design: Allow individual-specific time trajectories
+Formula: ~ group * time + (1 + time | subject)
+Example: daa linda -f "~ treatment * timepoint + (1 + timepoint | subject_id)" -t treatmentdisease
+
+Note: Requires sufficient data (>5 timepoints recommended)
+```
+
+### Batch Effects - Fixed Effect (Few Batches)
+```
+Design: 2-5 batches
+Formula: ~ group + batch
+Example: daa zinb -f "~ treatment + batch" -t treatmentdisease
+
+Note: Fixed effect estimates batch-specific intercepts
+```
+
+### Batch Effects - Random Effect (Many Batches)
+```
+Design: >5 batches or batches are nuisance
+Formula: ~ group + (1 | batch)
+Example: daa linda -f "~ treatment + (1 | batch)" -t treatmentdisease
+
+Note: Random effect pools information across batches
+```
+
+## Covariate Decision Rules
+
+### When to Include Covariates
+
+```
+INCLUDE covariate IF:
+  - Known biological confounder (age for disease)
+  - Imbalanced between groups
+  - Correlated with library size
+  - Prior literature suggests importance
+
+DO NOT include IF:
+  - Balanced between groups AND no biological basis
+  - Mediator of the effect (on causal path)
+  - Too many covariates for sample size (rule: n/10 parameters max)
+```
+
+### Library Size as Covariate
+
+```
+IF library_size_ratio > 2x between groups:
+  AND library_size correlates with group:
+    → Include log(library_size) as covariate
+    → Formula: ~ group + log_library_size
+
+  ALTERNATIVELY:
+    → Ensure CLR normalization is applied (handles this)
+```
+
+### Covariate Adjustment Strategy
+
+| Situation | Recommendation |
+|-----------|---------------|
+| Completely randomized experiment | Covariates optional |
+| Observational study | Adjust for known confounders |
+| Case-control with matching | Include matching variables |
+| Batch effects present | Always include batch |
+| Unbalanced continuous variable | Include as covariate |
 
 ## Prevalence Filter Guidelines
 

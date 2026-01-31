@@ -102,6 +102,58 @@ IF library_size differs by group (>2x):
     → Consider library size as covariate
 ```
 
+### Study Design Detection
+
+Inspect metadata for study design indicators:
+
+```bash
+head -5 {METADATA_FILE}
+```
+
+Look for these columns:
+
+| Column Pattern | Study Design | Recommended Model |
+|----------------|--------------|-------------------|
+| `subject`, `patient`, `individual`, `id` | Repeated measures | LMM with random intercept |
+| `time`, `timepoint`, `visit`, `day` | Longitudinal | LMM with time + random intercept |
+| `batch`, `run`, `plate`, `lane` | Batch effects | Include as covariate or random effect |
+| `age`, `bmi`, `sex` | Covariates | Include in formula |
+
+### Longitudinal Data Rules
+
+```
+IF has_subject_column AND has_time_column:
+    → Study type: Longitudinal
+    → Recommend: LMM with random intercept per subject
+    → Formula: "~ group * time + (1 | subject)"
+
+IF has_subject_column AND NOT has_time_column:
+    → Study type: Repeated measures (paired)
+    → Recommend: LMM with random intercept per subject
+    → Formula: "~ group + (1 | subject)"
+
+IF multiple_samples_per_subject:
+    → MUST use LMM to account for non-independence
+    → Standard models will have inflated Type I error
+```
+
+### Covariate Recommendations
+
+```
+IF has_batch_column:
+    → Always include batch in model
+    → Consider as random effect if many batches: (1 | batch)
+    → Or fixed effect if few batches: ~ group + batch
+
+IF has_continuous_covariates (age, bmi, etc.):
+    → Include if potentially confounding
+    → Formula: "~ group + age + bmi"
+
+IF library_size_imbalance > 2x AND correlated_with_group:
+    → Include log(library_size) as covariate
+    → Formula: "~ group + log_library_size"
+```
+
 ## Step 5: Generate Recommendations
 
 Output a structured recommendation:
@@ -113,16 +165,22 @@ Output a structured recommendation:
 
 **Dataset**: {n_features} features × {n_samples} samples
 **Sparsity**: {sparsity}%
+**Study design**: {cross-sectional | longitudinal | repeated-measures}
 **Samples per group**: {group_sizes}
 **Library size CV**: {cv}
+**Covariates detected**: {list of potential covariates}
 
 ## Recommended Analysis
 
 ### Primary Method: {METHOD}
 Rationale: {why this method based on data characteristics}
 
+### Formula: {formula}
+{If longitudinal: explain random effects}
+{If covariates: explain why included}
+
 ```bash
-daa {method} -c {counts} -m {metadata} -f "~ {group}" -t {group}{level} -o results_{method}.tsv
+daa {method} -c {counts} -m {metadata} -f "{formula}" -t {coefficient} -o results_{method}.tsv
 ```
 
 ### Threshold: {q_threshold}
@@ -132,11 +190,11 @@ daa {method} -c {counts} -m {metadata} -f "~ {group}" -t {group}{level} -o resul
 ### Secondary Validation (Optional)
 Run a second method to validate top hits:
 ```bash
-daa {validation_method} -c {counts} -m {metadata} -f "~ {group}" -t {group}{level} -o results_{validation}.tsv
+daa {validation_method} -c {counts} -m {metadata} -f "{formula}" -t {coefficient} -o results_{validation}.tsv
 ```
 
 ## Warnings
-{Any warnings about power, confounding, etc.}
+{Any warnings about power, confounding, non-independence, etc.}
 
 ## Expected Performance
 Based on benchmarks with similar data:
@@ -156,7 +214,9 @@ After presenting recommendations, offer:
 
 See [decision-rules.md](decision-rules.md) for complete decision tree and benchmark data.
 
-## Example Session
+## Example Sessions
+
+### Example 1: Cross-sectional Study
 
 **User**: "Analyze my microbiome data in data/counts.tsv"
 
@@ -166,3 +226,51 @@ See [decision-rules.md](decision-rules.md) for complete decision tree and benchm
 3. Recommends: "Based on 68% sparsity and n=25/group, I recommend **Hurdle model** at q < 0.05"
 4. Provides ready-to-run command
 5. Offers to execute
+
+### Example 2: Longitudinal Study
+
+**User**: "Analyze my longitudinal microbiome study"
+
+**Claude**:
+1. Inspects metadata: sees `subject_id`, `timepoint`, `treatment` columns
+2. Detects: Longitudinal design with repeated measures
+3. Runs `daa profile-llm -c counts.tsv -m metadata.tsv -g treatment`
+4. Sees: 55% sparsity, n=30 subjects, 3 timepoints each
+5. Recommends:
+   ```
+   Study design: Longitudinal (3 timepoints per subject)
+
+   Primary Method: LMM (Linear Mixed Model)
+   Rationale: Repeated measures require random effects to account for
+   within-subject correlation. Moderate sparsity allows CLR transformation.
+
+   Formula: "~ treatment * timepoint + (1 | subject_id)"
+   - treatment: main effect of interest
+   - timepoint: time effect
+   - treatment * timepoint: interaction (different trajectories?)
+   - (1 | subject_id): random intercept per subject
+
+   daa linda -c counts.tsv -m metadata.tsv \
+     -f "~ treatment * timepoint + (1 | subject_id)" \
+     -t treatmentdisease -o results_lmm.tsv
+   ```
+6. Warns: "Use LMM to avoid inflated Type I error from non-independent samples"
+
+### Example 3: Study with Batch Effects
+
+**User**: "My data has batch effects from different sequencing runs"
+
+**Claude**:
+1. Inspects metadata: sees `batch`, `group` columns
+2. Detects: 4 batches, potential confounding
+3. Recommends:
+   ```
+   Covariates detected: batch (4 levels)
+
+   Formula: "~ group + batch"
+   - Include batch as fixed effect (few levels)
+
+   Alternative if many batches:
+   Formula: "~ group + (1 | batch)"
+   - Include batch as random effect
+   ```

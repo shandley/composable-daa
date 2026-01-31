@@ -269,6 +269,7 @@ daa fetch -d ravel -o ./ravel_data/
 | `daa hurdle` | Hurdle model for sparse data |
 | `daa nb` | Negative binomial GLM |
 | `daa permutation` | Non-parametric permutation tests |
+| `daa recommend` | **Get method recommendation with ready-to-run command** |
 | `daa validate` | Spike-in validation |
 | `daa stress` | Compositional stress testing |
 | `daa optimize-prevalence` | Find optimal prevalence threshold |
@@ -279,13 +280,25 @@ daa fetch -d ravel -o ./ravel_data/
 ```
 User asks for analysis
        ↓
-/daa-diagnose (profile data, recommend method)
+daa recommend (or /daa-diagnose for detailed profile)
        ↓
 Run recommended `daa` command
        ↓
-Interpret results using /daa-guide thresholds
+/daa-interpret (or /daa-guide) to interpret results
        ↓
 Offer validation with `daa validate`
+```
+
+### Quick Start
+
+For users who want fast recommendations without detailed profiling:
+
+```bash
+# Get recommendation with ready-to-run command
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment
+
+# Or in quiet mode (just the command)
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --quiet
 ```
 
 ### Why This Matters

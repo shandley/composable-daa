@@ -424,6 +424,87 @@ enum Commands {
         #[arg(long)]
         clear_cache: bool,
     },
+
+    /// Recommend an analysis method based on data profile
+    Recommend {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Group column name
+        #[arg(short, long)]
+        group: String,
+
+        /// Target level within group (e.g., "treatment", "disease")
+        #[arg(short = 't', long)]
+        target: String,
+
+        /// Output results file path (optional - if provided, will output a ready-to-run command)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Just print the command, don't explain
+        #[arg(long)]
+        quiet: bool,
+    },
+
+    /// Run ZINB (Zero-Inflated Negative Binomial) analysis
+    Zinb {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Formula for the model (e.g., "~ group")
+        #[arg(short, long)]
+        formula: String,
+
+        /// Coefficient to test (e.g., "grouptreatment")
+        #[arg(short = 't', long)]
+        test_coef: String,
+
+        /// Output path for results TSV
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Prevalence threshold (default: 0.1)
+        #[arg(long, default_value = "0.1")]
+        prevalence: f64,
+    },
+
+    /// Run Negative Binomial GLM analysis
+    Nb {
+        /// Path to count matrix TSV
+        #[arg(short = 'c', long)]
+        counts: PathBuf,
+
+        /// Path to metadata TSV
+        #[arg(short, long)]
+        metadata: PathBuf,
+
+        /// Formula for the model (e.g., "~ group")
+        #[arg(short, long)]
+        formula: String,
+
+        /// Coefficient to test (e.g., "grouptreatment")
+        #[arg(short = 't', long)]
+        test_coef: String,
+
+        /// Output path for results TSV
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Prevalence threshold (default: 0.1)
+        #[arg(long, default_value = "0.1")]
+        prevalence: f64,
+    },
 }
 
 fn main() {
@@ -602,6 +683,33 @@ fn main() {
             list,
             clear_cache: clear,
         } => cmd_fetch(dataset.as_deref(), output.as_ref(), list, clear),
+
+        Commands::Recommend {
+            counts,
+            metadata,
+            group,
+            target,
+            output,
+            quiet,
+        } => cmd_recommend(&counts, &metadata, &group, &target, output.as_ref(), quiet),
+
+        Commands::Zinb {
+            counts,
+            metadata,
+            formula,
+            test_coef,
+            output,
+            prevalence,
+        } => cmd_zinb(&counts, &metadata, &formula, &test_coef, &output, prevalence),
+
+        Commands::Nb {
+            counts,
+            metadata,
+            formula,
+            test_coef,
+            output,
+            prevalence,
+        } => cmd_nb(&counts, &metadata, &formula, &test_coef, &output, prevalence),
     };
 
     if let Err(e) = result {
@@ -683,24 +791,69 @@ fn cmd_linda(
     eprintln!("Writing results to {:?}...", output_path);
     results.to_tsv(output_path)?;
 
-    eprintln!("Done! {} features tested", results.len());
-    let n_sig = results.significant().len();
-    eprintln!("  {} significant at q < 0.05", n_sig);
+    print_results_summary(&results, false);
+
+    Ok(())
+}
+
+/// Truncate a string to max_len characters
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len-3])
+    }
+}
+
+/// Print formatted results summary
+fn print_results_summary(results: &composable_daa::data::DaResultSet, show_fold_change: bool) {
+    let n_sig_05 = results.significant().len();
+    let n_sig_10 = results.results.iter().filter(|r| r.q_value < 0.10).count();
+    let n_up = results.results.iter().filter(|r| r.q_value < 0.05 && r.estimate > 0.0).count();
+    let n_down = results.results.iter().filter(|r| r.q_value < 0.05 && r.estimate < 0.0).count();
+
+    eprintln!();
+    eprintln!("=== Results Summary ===");
+    eprintln!("Features tested:     {}", results.len());
+    eprintln!("Significant q<0.05:  {}", n_sig_05);
+    eprintln!("Significant q<0.10:  {}", n_sig_10);
+    if n_sig_05 > 0 {
+        eprintln!("  Up in target:      {}", n_up);
+        eprintln!("  Down in target:    {}", n_down);
+    }
 
     // Print top hits
     let mut sorted = results.results.clone();
     sorted.sort_by(|a, b| a.q_value.partial_cmp(&b.q_value).unwrap());
     if !sorted.is_empty() {
-        eprintln!("\nTop 5 hits:");
-        for r in sorted.iter().take(5) {
-            eprintln!(
-                "  {}: estimate={:.3}, q={:.4}",
-                r.feature_id, r.estimate, r.q_value
-            );
+        eprintln!();
+        if show_fold_change {
+            eprintln!("Top 5 hits:");
+            eprintln!("  {:<20} {:>10} {:>8} {:>10}", "Feature", "Estimate", "FC", "q-value");
+            eprintln!("  {}", "-".repeat(52));
+            for r in sorted.iter().take(5) {
+                let sig_marker = if r.q_value < 0.05 { "*" } else if r.q_value < 0.10 { "." } else { " " };
+                let fc = r.estimate.exp();
+                eprintln!(
+                    "  {:<20} {:>10.3} {:>7.1}x {:>10.4}{}",
+                    truncate_str(&r.feature_id, 20), r.estimate, fc, r.q_value, sig_marker
+                );
+            }
+        } else {
+            eprintln!("Top 5 hits:");
+            eprintln!("  {:<20} {:>10} {:>10}", "Feature", "Estimate", "q-value");
+            eprintln!("  {}", "-".repeat(42));
+            for r in sorted.iter().take(5) {
+                let sig_marker = if r.q_value < 0.05 { "*" } else if r.q_value < 0.10 { "." } else { " " };
+                eprintln!(
+                    "  {:<20} {:>10.3} {:>10.4}{}",
+                    truncate_str(&r.feature_id, 20), r.estimate, r.q_value, sig_marker
+                );
+            }
         }
+        eprintln!();
+        eprintln!("  * = q < 0.05, . = q < 0.10");
     }
-
-    Ok(())
 }
 
 /// Run hurdle model analysis for sparse count data
@@ -747,22 +900,7 @@ fn cmd_hurdle(
     eprintln!("Writing results to {:?}...", output_path);
     results.to_tsv(output_path)?;
 
-    eprintln!("Done! {} features tested", results.len());
-    let n_sig = results.significant().len();
-    eprintln!("  {} significant at q < 0.05", n_sig);
-
-    // Print top hits
-    let mut sorted = results.results.clone();
-    sorted.sort_by(|a, b| a.q_value.partial_cmp(&b.q_value).unwrap());
-    if !sorted.is_empty() {
-        eprintln!("\nTop 5 hits:");
-        for r in sorted.iter().take(5) {
-            eprintln!(
-                "  {}: estimate={:.3}, q={:.4}",
-                r.feature_id, r.estimate, r.q_value
-            );
-        }
-    }
+    print_results_summary(&results, false);
 
     Ok(())
 }
@@ -807,22 +945,7 @@ fn cmd_permutation(
     eprintln!("Writing results to {:?}...", output_path);
     results.to_tsv(output_path)?;
 
-    eprintln!("Done! {} features tested", results.len());
-    let n_sig = results.significant().len();
-    eprintln!("  {} significant at q < 0.05", n_sig);
-
-    // Print top hits
-    let mut sorted = results.results.clone();
-    sorted.sort_by(|a, b| a.q_value.partial_cmp(&b.q_value).unwrap());
-    if !sorted.is_empty() {
-        eprintln!("\nTop 5 hits:");
-        for r in sorted.iter().take(5) {
-            eprintln!(
-                "  {}: estimate={:.3}, q={:.4}",
-                r.feature_id, r.estimate, r.q_value
-            );
-        }
-    }
+    print_results_summary(&results, false);
 
     Ok(())
 }
@@ -1525,6 +1648,198 @@ fn cmd_fetch(
         eprintln!();
         eprintln!("This dataset has experimental spike-in controls!");
     }
+
+    Ok(())
+}
+
+/// Recommend analysis method based on data profile
+fn cmd_recommend(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    group: &str,
+    target: &str,
+    output_path: Option<&PathBuf>,
+    quiet: bool,
+) -> Result<()> {
+    // Load data
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    if !quiet {
+        eprintln!("Analyzing data profile...");
+    }
+
+    // Get profile
+    let profile = profile_for_llm(&counts, &metadata, group)?;
+
+    // Extract key metrics from profile
+    let sparsity = profile.sparsity.overall;
+    let n_features = profile.data_summary.features;
+    let n_samples = profile.data_summary.samples;
+
+    // Get group sizes
+    let group_sizes: Vec<usize> = profile.data_summary.groups.sizes.values().cloned().collect();
+    let min_group_size = group_sizes.iter().min().copied().unwrap_or(0);
+
+    // Determine recommended method based on sparsity
+    let (method, threshold, rationale) = if sparsity > 0.70 {
+        ("hurdle", "0.05", "High sparsity (>70%) indicates structural zeros - Hurdle model separates presence from abundance")
+    } else if sparsity > 0.50 {
+        ("zinb", "0.05", "Moderate-high sparsity (50-70%) suggests zero-inflation - ZINB models excess zeros")
+    } else if sparsity > 0.30 {
+        ("zinb", "0.05", "Moderate sparsity (30-50%) - ZINB or NB work well")
+    } else {
+        ("linda", "0.10", "Low sparsity (<30%) - standard CLR + linear model works well. Use q<0.10 due to CLR attenuation")
+    };
+
+    // Build the coefficient name
+    let test_coef = format!("{}{}", group, target);
+
+    // Build the formula
+    let formula = format!("~ {}", group);
+
+    // Determine output file path
+    let output_file = output_path
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| format!("results_{}.tsv", method));
+
+    // Build the command
+    let cmd = format!(
+        "daa {} -c {} -m {} -f \"{}\" -t {} -o {}",
+        method,
+        counts_path.display(),
+        metadata_path.display(),
+        formula,
+        test_coef,
+        output_file
+    );
+
+    if quiet {
+        println!("{}", cmd);
+    } else {
+        println!();
+        println!("=== Data Summary ===");
+        println!("Features:        {}", n_features);
+        println!("Samples:         {}", n_samples);
+        println!("Sparsity:        {:.1}%", sparsity * 100.0);
+        println!("Min group size:  {}", min_group_size);
+        println!();
+        println!("=== Recommendation ===");
+        println!("Method:    {}", method.to_uppercase());
+        println!("Threshold: q < {}", threshold);
+        println!();
+        println!("Rationale: {}", rationale);
+        println!();
+
+        // Warnings
+        if min_group_size < 10 {
+            println!("WARNING: Very small group size (n={}). Only large effects will be detectable.", min_group_size);
+            println!();
+        } else if min_group_size < 20 {
+            println!("NOTE: Limited power with n={}. Effects >4x fold change should be detectable.", min_group_size);
+            println!();
+        }
+
+        // Check library size imbalance
+        if let Some(ratio) = profile.library_size.by_group.as_ref().map(|g| g.ratio) {
+            if ratio > 2.0 {
+                println!("WARNING: Library size imbalance ({:.1}x). Results may be confounded.", ratio);
+                println!();
+            }
+        }
+
+        println!("=== Ready-to-run Command ===");
+        println!("{}", cmd);
+        println!();
+        println!("After running, interpret results:");
+        if method == "linda" {
+            println!("  - Use q < 0.10 threshold (not 0.05) due to CLR attenuation");
+            println!("  - Effect sizes are in CLR units; multiply by ~4 for approximate log2FC");
+        } else {
+            println!("  - Use q < 0.05 threshold");
+            println!("  - Effect sizes are in log scale; exp(estimate) = fold change");
+        }
+    }
+
+    Ok(())
+}
+
+/// Run ZINB analysis
+fn cmd_zinb(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    formula: &str,
+    test_coef: &str,
+    output_path: &PathBuf,
+    prevalence: f64,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    eprintln!("Running ZINB analysis...");
+    eprintln!("  Formula: {}", formula);
+    eprintln!("  Testing: {}", test_coef);
+    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
+
+    let results = Pipeline::new()
+        .name("ZINB")
+        .filter_prevalence(prevalence)
+        .model_zinb(formula)
+        .test_wald(test_coef)
+        .correct_bh()
+        .run(&counts, &metadata)?;
+
+    eprintln!("Writing results to {:?}...", output_path);
+    results.to_tsv(output_path)?;
+
+    print_results_summary(&results, true);
+
+    Ok(())
+}
+
+/// Run Negative Binomial GLM analysis
+fn cmd_nb(
+    counts_path: &PathBuf,
+    metadata_path: &PathBuf,
+    formula: &str,
+    test_coef: &str,
+    output_path: &PathBuf,
+    prevalence: f64,
+) -> Result<()> {
+    eprintln!("Loading data...");
+    let counts = CountMatrix::from_tsv(counts_path)?;
+    let metadata = Metadata::from_tsv(metadata_path)?;
+
+    eprintln!(
+        "Loaded {} features x {} samples",
+        counts.n_features(),
+        counts.n_samples()
+    );
+
+    eprintln!("Running Negative Binomial GLM analysis...");
+    eprintln!("  Formula: {}", formula);
+    eprintln!("  Testing: {}", test_coef);
+    eprintln!("  Prevalence threshold: {:.1}%", prevalence * 100.0);
+
+    let results = Pipeline::new()
+        .name("NB")
+        .filter_prevalence(prevalence)
+        .model_nb(formula)
+        .test_wald(test_coef)
+        .correct_bh()
+        .run(&counts, &metadata)?;
+
+    eprintln!("Writing results to {:?}...", output_path);
+    results.to_tsv(output_path)?;
+
+    print_results_summary(&results, true);
 
     Ok(())
 }
