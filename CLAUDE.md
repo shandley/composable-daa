@@ -294,7 +294,12 @@ daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --run -o resul
 # Just get recommendation (no execution)
 daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment
 
-# Quiet mode - just the command
+# Generate editable YAML config (for custom formulas, covariates, longitudinal)
+daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --yaml -o pipeline.yaml
+# Then edit the YAML and run:
+daa run -c counts.tsv -m metadata.tsv --config pipeline.yaml -o results.tsv
+
+# Quiet mode - just the command/config
 daa recommend -c counts.tsv -m metadata.tsv -g group -t treatment --quiet
 ```
 

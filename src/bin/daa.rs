@@ -53,7 +53,7 @@ enum Commands {
     /// Run a pipeline from a YAML configuration file
     Run {
         /// Path to pipeline configuration YAML
-        #[arg(short, long)]
+        #[arg(long)]
         config: PathBuf,
 
         /// Path to count matrix TSV
@@ -381,15 +381,19 @@ enum Commands {
         #[arg(short = 't', long)]
         target: String,
 
-        /// Output results file path
+        /// Output file path (results TSV or pipeline YAML)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Run the recommended analysis (not just print recommendation)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "yaml")]
         run: bool,
 
-        /// Just print the pipeline config, no explanation
+        /// Output an editable YAML pipeline config instead of running
+        #[arg(long, conflicts_with = "run")]
+        yaml: bool,
+
+        /// Just print the command/config, no explanation
         #[arg(long)]
         quiet: bool,
     },
@@ -543,8 +547,9 @@ fn main() {
             target,
             output,
             run,
+            yaml,
             quiet,
-        } => cmd_recommend(&counts, &metadata, &group, &target, output.as_ref(), run, quiet),
+        } => cmd_recommend(&counts, &metadata, &group, &target, output.as_ref(), run, yaml, quiet),
     };
 
     if let Err(e) = result {
@@ -1402,6 +1407,7 @@ fn cmd_recommend(
     target: &str,
     output_path: Option<&PathBuf>,
     run: bool,
+    yaml: bool,
     quiet: bool,
 ) -> Result<()> {
     // Load data
@@ -1424,6 +1430,21 @@ fn cmd_recommend(
     let group_sizes: Vec<usize> = profile.data_summary.groups.sizes.values().cloned().collect();
     let min_group_size = group_sizes.iter().min().copied().unwrap_or(0);
 
+    // Detect potential covariates from metadata columns
+    let all_columns: Vec<&str> = metadata.column_names().iter().map(|s| s.as_str()).collect();
+    let covariate_patterns = ["age", "sex", "gender", "bmi", "weight", "batch", "run", "plate",
+                              "lane", "site", "location", "center", "subject", "patient",
+                              "individual", "participant", "time", "timepoint", "visit", "day", "week"];
+    let detected_covariates: Vec<&str> = all_columns
+        .iter()
+        .filter(|col| {
+            let col_lower = col.to_lowercase();
+            col_lower != group.to_lowercase() &&
+            covariate_patterns.iter().any(|p| col_lower.contains(p))
+        })
+        .copied()
+        .collect();
+
     // Determine recommended method based on sparsity
     let (method, threshold, rationale) = if sparsity > 0.70 {
         ("hurdle", "0.05", "High sparsity (>70%) indicates structural zeros - Hurdle model separates presence from abundance")
@@ -1441,7 +1462,44 @@ fn cmd_recommend(
     // Build the formula
     let formula = format!("~ {}", group);
 
-    // Determine output file path
+    // Handle YAML output mode
+    if yaml {
+        let yaml_file = output_path
+            .map(|p| p.clone())
+            .unwrap_or_else(|| PathBuf::from(format!("pipeline_{}.yaml", method)));
+
+        let yaml_content = generate_pipeline_yaml(
+            method,
+            &formula,
+            &test_coef,
+            sparsity,
+            &detected_covariates,
+            group,
+            min_group_size,
+            &profile.library_size.by_group.as_ref().map(|g| g.ratio),
+        );
+
+        if quiet {
+            // Just print the YAML to stdout
+            println!("{}", yaml_content);
+        } else {
+            // Write to file with explanation
+            std::fs::write(&yaml_file, &yaml_content)?;
+            println!("Pipeline config written to: {}", yaml_file.display());
+            println!();
+            println!("To run this pipeline:");
+            println!("  daa run -c {} -m {} --config {} -o results.tsv",
+                     counts_path.display(), metadata_path.display(), yaml_file.display());
+            println!();
+            if !detected_covariates.is_empty() {
+                println!("Detected potential covariates: {}", detected_covariates.join(", "));
+                println!("Edit the YAML to include them in the formula if needed.");
+            }
+        }
+        return Ok(());
+    }
+
+    // Determine output file path for results
     let output_file = output_path
         .map(|p| p.clone())
         .unwrap_or_else(|| PathBuf::from(format!("results_{}.tsv", method)));
@@ -1574,4 +1632,111 @@ fn cmd_recommend(
     }
 
     Ok(())
+}
+
+/// Generate a commented YAML pipeline configuration
+fn generate_pipeline_yaml(
+    method: &str,
+    formula: &str,
+    test_coef: &str,
+    sparsity: f64,
+    detected_covariates: &[&str],
+    group: &str,
+    min_group_size: usize,
+    library_ratio: &Option<f64>,
+) -> String {
+    let mut yaml = String::new();
+
+    // Header comments
+    yaml.push_str("# Pipeline Configuration\n");
+    yaml.push_str("# Generated by: daa recommend\n");
+    yaml.push_str(&format!("# Method: {} (selected based on {:.1}% sparsity)\n", method.to_uppercase(), sparsity * 100.0));
+    yaml.push_str("#\n");
+
+    // Method selection rationale
+    let rationale = match method {
+        "hurdle" => "High sparsity (>70%) - Hurdle model separates presence from abundance",
+        "zinb" => "Moderate sparsity (50-70%) - ZINB models zero-inflation",
+        "linda" => "Low sparsity (<30%) - CLR + linear model works well",
+        _ => "Selected based on data characteristics",
+    };
+    yaml.push_str(&format!("# Rationale: {}\n", rationale));
+
+    // Threshold guidance
+    let threshold = if method == "linda" { "0.10" } else { "0.05" };
+    yaml.push_str(&format!("# Recommended threshold: q < {}\n", threshold));
+    if method == "linda" {
+        yaml.push_str("#   (LinDA uses q<0.10 due to CLR effect attenuation)\n");
+    }
+    yaml.push_str("#\n");
+
+    // Warnings
+    if min_group_size < 10 {
+        yaml.push_str(&format!("# WARNING: Small group size (n={}). Only large effects detectable.\n", min_group_size));
+    } else if min_group_size < 20 {
+        yaml.push_str(&format!("# NOTE: Limited power (n={}). Effects >4x fold change detectable.\n", min_group_size));
+    }
+
+    if let Some(ratio) = library_ratio {
+        if *ratio > 2.0 {
+            yaml.push_str(&format!("# WARNING: Library size imbalance ({:.1}x). Consider adding as covariate.\n", ratio));
+        }
+    }
+
+    // Detected covariates
+    if !detected_covariates.is_empty() {
+        yaml.push_str("#\n");
+        yaml.push_str("# Detected potential covariates (not included - edit formula to add):\n");
+        for cov in detected_covariates {
+            yaml.push_str(&format!("#   - {}\n", cov));
+        }
+        yaml.push_str(&format!("#   Example: formula: \"~ {} + {}\"\n", group, detected_covariates.join(" + ")));
+    }
+
+    yaml.push_str("#\n");
+    yaml.push_str("# Edit this file to customize, then run with:\n");
+    yaml.push_str("#   daa run -c counts.tsv -m metadata.tsv --config this_file.yaml -o results.tsv\n");
+    yaml.push_str("\n");
+
+    // Pipeline definition
+    let method_upper = match method {
+        "hurdle" => "Hurdle",
+        "zinb" => "ZINB",
+        "linda" => "LinDA",
+        _ => method,
+    };
+
+    yaml.push_str(&format!("name: {}\n", method_upper));
+    yaml.push_str(&format!("description: Auto-generated {} pipeline\n", method_upper));
+    yaml.push_str("steps:\n");
+
+    // Filter step
+    yaml.push_str("- !FilterPrevalence\n");
+    yaml.push_str("  threshold: 0.1\n");
+
+    // Method-specific steps
+    match method {
+        "hurdle" => {
+            yaml.push_str("- !ModelHurdle\n");
+            yaml.push_str(&format!("  formula: \"{}\"\n", formula));
+        }
+        "zinb" => {
+            yaml.push_str("- !ModelZINB\n");
+            yaml.push_str(&format!("  formula: \"{}\"\n", formula));
+        }
+        "linda" | _ => {
+            yaml.push_str("- !AddPseudocount\n");
+            yaml.push_str("  value: 0.5\n");
+            yaml.push_str("- NormalizeCLR\n");
+            yaml.push_str("- !ModelLM\n");
+            yaml.push_str(&format!("  formula: \"{}\"\n", formula));
+        }
+    }
+
+    // Test and correct
+    yaml.push_str("- !TestWald\n");
+    yaml.push_str(&format!("  coefficient: {}\n", test_coef));
+    yaml.push_str("- CorrectBH\n");
+
+    yaml
 }
