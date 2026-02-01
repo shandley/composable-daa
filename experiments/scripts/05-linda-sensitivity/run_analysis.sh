@@ -51,10 +51,7 @@ generate_data() {
     echo "Generating data with effect size = ${effect_size} log2FC..."
 
     "$DAA_BIN" generate \
-        --n-samples 40 \
-        --n-features 200 \
-        --sparsity 0.65 \
-        --library-size 10000 \
+        --preset typical_16s \
         --effect-size "$effect_size" \
         --n-differential 18 \
         -o "$output_dir"
