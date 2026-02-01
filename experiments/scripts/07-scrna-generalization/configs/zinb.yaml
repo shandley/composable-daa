@@ -1,0 +1,10 @@
+name: zinb
+description: Zero-Inflated Negative Binomial pipeline
+steps:
+- !FilterPrevalence
+  threshold: 0.05
+- !ModelZINB
+  formula: "~ group"
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

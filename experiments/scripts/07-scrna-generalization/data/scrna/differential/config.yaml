@@ -1,0 +1,12 @@
+name: sparse_virome
+n_features: 200
+n_samples_per_group: 20
+sparsity: 0.85
+dominance: 0.6
+library_size_cv: 0.6
+mean_library_size: 20000
+group_library_ratio: 1.0
+n_differential: 20
+effect_size: 4.0
+group_specific_fraction: 0.0
+seed: 42

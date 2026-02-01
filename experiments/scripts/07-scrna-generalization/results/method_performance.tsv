@@ -1,0 +1,11 @@
+data_type	method	n_tested	n_true_pos	n_significant_005	n_significant_010	tp_005	tp_010	sensitivity_005	sensitivity_010	fdr_005	fdr_010
+scrna	linda	162	20	0	0	0	0	0	0	0	0
+microbiome	linda	199	20	0	0	0	0	0	0	0	0
+scrna	zinb	162	20	35	47	10	12	.5000	.6000	.7142	.7446
+microbiome	zinb	199	20	22	27	15	17	.7500	.8500	.3181	.3703
+scrna	hurdle	162	20	8	8	4	4	.2000	.2000	.5000	.5000
+microbiome	hurdle	199	20	20	20	15	15	.7500	.7500	.2500	.2500
+scrna	nb	162	20	0	0	0	0	0	0	0	0
+microbiome	nb	199	20	1	3	1	2	.0500	.1000	0	.3333
+scrna	permutation	162	20	0	0	0	0	0	0	0	0
+microbiome	permutation	199	20	0	0	0	0	0	0	0	0

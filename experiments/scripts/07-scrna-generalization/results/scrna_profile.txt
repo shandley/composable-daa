@@ -1,0 +1,242 @@
+meta:
+  generated: 2026-02-01T02:46:45.325986+00:00
+  version: 0.1.0
+  tool: composable-daa
+  source_counts: null
+  source_metadata: null
+data_summary:
+  description: Microbiome count matrix for differential abundance analysis
+  features: 200
+  samples: 40
+  groups:
+    column: group
+    levels:
+    - treatment
+    - control
+    sizes:
+      treatment: 20
+      control: 20
+    balanced: true
+sparsity:
+  overall: 0.8905
+  category: High
+  context: High sparsity (70-90% zeros) suggests either shallow sequencing, a diverse community, or both. Zero-inflated models (ZINB) may better capture the data structure. Prevalence filtering is important to remove noise features.
+  by_group:
+    control: 0.88925
+    treatment: 0.89175
+  group_interpretation: Similar sparsity across groups
+  implications:
+  - code: ZERO_HANDLING_REQUIRED
+    message: CLR requires pseudocount to avoid log(0)
+  - code: CONSIDER_ZINB
+    message: ZINB may better model structural zeros
+  - code: FILTER_REQUIRED
+    message: Prevalence filtering important to reduce noise
+    severity: moderate
+prevalence:
+  mean: 0.10949999999999996
+  median: 0.125
+  distribution:
+    very_rare:
+      threshold: 0.05
+      count: 38
+      percent: 19.0
+    rare:
+      threshold: 0.1
+      count: 59
+      percent: 29.5
+    low:
+      threshold: 0.25
+      count: 129
+      percent: 64.5
+    moderate:
+      threshold: 0.5
+      count: 3
+      percent: 1.5
+    common:
+      threshold: 0.75
+      count: 0
+      percent: 0.0
+    ubiquitous:
+      threshold: 1.0
+      count: 0
+      percent: 0.0
+  group_specific:
+    count: 4
+    percent: 2.0
+    definition: '>20% prevalence difference between groups'
+    context: Few group-specific features - overall prevalence filtering is appropriate
+  implications: []
+library_size:
+  mean: 1356.225
+  median: 787.5
+  min: 26
+  max: 6669
+  cv: 1.089495339631592
+  category: High
+  by_group:
+    stats:
+      treatment:
+        mean: 1418.25
+        median: 773.5
+      control:
+        mean: 1294.2
+        median: 849.5
+    ratio: 1.0958507185906352
+    interpretation: Balanced library sizes across groups
+  context: High library size variation (CV 1.0-2.0) requires careful normalization. Check for outlier samples and consider whether variation is biological or technical.
+  implications:
+  - code: NORMALIZATION_CRITICAL
+    message: Normalization is critical for valid comparisons
+    severity: moderate
+  - code: CHECK_OUTLIERS
+    message: Check for outlier samples with very low or high depth
+compositionality:
+  dominance:
+    top_1_percent: 12.594996164009517
+    top_3_percent: 30.44038559743688
+    top_10_percent: 46.697956649286034
+  evenness: 0.7690293882650291
+  gini: 0.7594236202019549
+  category: moderate
+  dominant_features:
+  - id: Feature_0002
+    mean_proportion: 0.12594996164009517
+  - id: Feature_0001
+    mean_proportion: 0.09305290245312044
+  - id: Feature_0000
+    mean_proportion: 0.08540099188115316
+  - id: Feature_0003
+    mean_proportion: 0.03838165830624675
+  - id: Feature_0007
+    mean_proportion: 0.02861115676322474
+  - id: Feature_0009
+    mean_proportion: 0.023280979436719848
+  - id: Feature_0024
+    mean_proportion: 0.020924344637683168
+  - id: Feature_0021
+    mean_proportion: 0.01766429153420421
+  - id: Feature_0030
+    mean_proportion: 0.01700816348524113
+  - id: Feature_0014
+    mean_proportion: 0.01670511635517163
+  context: Moderate dominance indicates some compositional bias is possible. When a dominant taxon changes, it may create apparent changes in other taxa even if their absolute abundance is unchanged.
+  implications: []
+recommendations:
+  filtering:
+    prevalence:
+      recommendation: 5-10% overall prevalence threshold
+      confidence: medium
+      rationale: Few group-specific features, so overall prevalence filtering is appropriate. 5-10% balances noise reduction with signal preservation.
+      alternatives:
+      - option: Groupwise filtering
+        when: Suspect presence/absence differences are biologically important
+      - option: Run optimize-prevalence
+        when: Want data-driven threshold selection
+  zero_handling:
+    recommendation: Pseudocount 0.5, or consider ZINB
+    confidence: medium
+    rationale: High sparsity may benefit from zero-inflated models that distinguish structural from sampling zeros.
+    alternatives:
+    - option: Different pseudocount (0.1, 1.0)
+      when: Want to assess sensitivity to pseudocount choice
+  normalization:
+    recommendation: CLR (Centered Log-Ratio)
+    confidence: high
+    rationale: CLR is the standard for compositional data, handling the unit-sum constraint while preserving relative relationships.
+    alternatives:
+    - option: TSS (Total Sum Scaling)
+      when: Need simple relative abundances without log transformation
+    - option: No normalization with ZINB
+      when: Using count-based models that handle library size internally
+  model:
+    recommendation: ZINB or linear model with careful validation
+    confidence: medium
+    rationale: High sparsity may benefit from zero-inflated models, but linear models can still work well with appropriate filtering.
+    alternatives:
+    - option: Linear model on CLR
+      when: Prefer interpretability and speed
+    - option: Presence/absence logistic
+      when: Binary presence is the main signal
+validation:
+  description: Validation ensures your pipeline performs as expected on your specific data. Spike-in tests inject known effects and measure detection accuracy.
+  essential:
+  - name: Spike-in validation
+    purpose: Verify detection of 2-fold changes at controlled FDR
+    command: daa validate -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment --fold-change 2.0
+    expected: Sensitivity >70%, FDR <15%
+    interpretation: If sensitivity is low, consider adjusting filtering or trying a different model. If FDR is high, increase the significance threshold.
+  - name: Prevalence optimization
+    purpose: Find optimal prevalence threshold for your data
+    command: daa optimize-prevalence -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment
+    expected: Recommended threshold with F1 score
+    interpretation: Use the recommended threshold, or compare results at different thresholds to assess robustness.
+  recommended:
+  - name: Compositional stress test
+    purpose: Quantify compositional effect attenuation
+    command: daa stress -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment --quick
+    expected: Effect attenuation <30%
+    interpretation: High attenuation indicates compositional effects are substantial; interpret fold-changes cautiously.
+warnings: []
+pipelines:
+  recommended:
+    name: recommended_pipeline
+    description: 'Based on your data profile: Few group-specific features, so overall prevalence filtering is appropriate. 5-10% balances noise reduction with signal preservation.. This pipeline uses groupwise filtering to preserve group-specific signals, CLR normalization for compositional data, and linear modeling for efficiency.'
+    config: |-
+      name: recommended_pipeline
+      steps:
+        - filter_prevalence_groupwise:
+            threshold: 0.05
+            group_column: "group"
+            logic: any
+        - add_pseudocount:
+            value: 0.5
+        - normalize_clr: {}
+        - model_lm:
+            formula: "~ group"
+        - test_wald:
+            coefficient: "grouptreatment"
+        - correct_bh:
+            alpha: 0.05
+  alternatives:
+  - name: zinb_pipeline
+    description: Zero-inflated negative binomial model for data with structural zeros. More computationally intensive but may better capture zero-inflation.
+    config: |-
+      name: zinb_pipeline
+      steps:
+        - filter_prevalence_groupwise:
+            threshold: 0.05
+            group_column: "group"
+            logic: any
+        - model_zinb:
+            formula: "~ group"
+            max_iter: 100
+        - test_wald_zinb:
+            coefficient: "grouptreatment"
+        - correct_bh:
+            alpha: 0.05
+llm_summary: |+
+  ## Data Overview
+
+  This is a microbiome count matrix with high sparsity (89% zeros), high_variation library size variation (CV=1.09), and moderate dominance (30% from top 3 features).
+
+  ## Key Characteristics
+
+  - Sparsity: high - High sparsity (70-90% zeros) suggests either shallow sequencing, a diverse community, or both. Zero-inflated models (ZINB) may better capture the data structure. Prevalence filtering is important to remove noise features.
+  - Group-specific features: 2.0% - Few group-specific features - overall prevalence filtering is appropriate
+  - Library size: high_variation (Balanced library sizes across groups)
+  - Compositionality: moderate dominance, evenness=0.77
+
+  ## Recommended Approach
+
+  1. Filter: 5-10% overall prevalence threshold
+  2. Zeros: Pseudocount 0.5, or consider ZINB
+  3. Normalize: CLR (Centered Log-Ratio)
+  4. Model: ZINB or linear model with careful validation
+
+  ## Critical Validations
+
+  - Run spike-in validation to verify detection performance
+  - Run optimize-prevalence to find data-driven threshold
+
+

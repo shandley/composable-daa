@@ -2,15 +2,15 @@
 
 ## Executive Summary
 
-Six systematic experiments demonstrating fundamental challenges in microbiome differential abundance analysis and validating our composable toolkit as a solution.
+Seven systematic experiments demonstrating fundamental challenges in sparse count differential abundance analysis and validating our composable toolkit as a solution that generalizes across data types.
 
 **The Core Problem**: >90% of statistically significant microbiome findings have effect sizes that could be entirely explained by methodological artifacts rather than genuine biology.
 
-**The Solution**: Empirically validated, composable methods with clear guidance on thresholds, effect size interpretation, and method selection.
+**The Solution**: Empirically validated, composable methods with clear guidance on thresholds, effect size interpretation, and method selection - applicable to microbiome, virome, and scRNA-seq data.
 
 ---
 
-## The Six Experiments
+## The Seven Experiments
 
 ### Experiment 01: Compositional Closure
 **Question**: Do CLR-normalized analyses impose mathematical constraints on results?
@@ -109,6 +109,27 @@ Six systematic experiments demonstrating fundamental challenges in microbiome di
 
 ---
 
+### Experiment 07: scRNA-seq Generalization
+**Question**: Does the toolkit generalize beyond microbiome data to other sparse count data types?
+
+**Finding**: The same methods work for single-cell RNA-seq with comparable performance.
+
+| Data Type | Sparsity | Best Method | Key Challenge |
+|-----------|----------|-------------|---------------|
+| 16S Microbiome | 65% | ZINB/Hurdle | Compositional |
+| Virome | 89% | Hurdle | High sparsity |
+| scRNA-seq | 87% | Hurdle | Dropout |
+
+| Metric | Microbiome | scRNA-seq | Conclusion |
+|--------|------------|-----------|------------|
+| FPR Calibrated | Yes | Yes | Methods transfer |
+| LinDA threshold | q < 0.10 | q < 0.10 | Same guidance applies |
+| Best discovery | Hurdle | Hurdle | Same recommendations |
+
+**Impact**: The toolkit is a **unified framework for sparse count data**, not just a microbiome tool. Same methods, same thresholds, same interpretation across domains.
+
+---
+
 ## Synthesis: The Three-Layer Problem
 
 ```
@@ -135,6 +156,12 @@ Six systematic experiments demonstrating fundamental challenges in microbiome di
 │  • Proper FPR calibration (Exp 04)                              │
 │  • Correct thresholds: LinDA q<0.10 (Exp 05)                    │
 │  • Effect size interpretation (Exp 06)                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  GENERALIZATION: UNIFIED SPARSE COUNT FRAMEWORK (Exp 07)        │
+│  Microbiome (16S/virome) ←→ scRNA-seq ←→ Other sparse counts    │
+│  Same challenges, same methods, same recommendations            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -178,10 +205,11 @@ experiments/scripts/
 ├── 03-artifact-audit/run_analysis.sh
 ├── 04-variance-estimation/run_analysis.sh
 ├── 05-linda-sensitivity/run_analysis.sh
-└── 06-effect-size-recovery/run_analysis.sh
+├── 06-effect-size-recovery/run_analysis.sh
+└── 07-scrna-generalization/run_analysis.sh
 ```
 
-### Figures (~35 publication-ready)
+### Figures (~40 publication-ready)
 ```
 experiments/scripts/
 ├── 01-bv-analysis/generate_figures.py          # 7 figures
@@ -189,12 +217,13 @@ experiments/scripts/
 ├── 03-artifact-audit/generate_figures.py       # 5 figures
 ├── 04-variance-estimation/generate_figures.py  # 5 figures
 ├── 05-linda-sensitivity/generate_figures.py    # 6 figures
-└── 06-effect-size-recovery/generate_figures.py # 6 figures
+├── 06-effect-size-recovery/generate_figures.py # 6 figures
+└── 07-scrna-generalization/generate_figures.py # 5 figures
 ```
 
 ### Documentation
-- 6 detailed experiment markdown files
-- 6 figure legend files
+- 7 detailed experiment markdown files
+- 7 figure legend files
 - This summary document
 
 ---
@@ -202,7 +231,7 @@ experiments/scripts/
 ## Key Messages for Publication
 
 ### For the Abstract
-> Microbiome differential abundance analysis faces three compounding challenges: compositional closure forces mathematical coupling between taxa, load variation creates ±3.3 log2FC artifact potential, and >90% of published effect sizes fall within this artifact range. We present a composable toolkit with empirically validated methods and demonstrate that proper threshold selection (q < 0.10 for LinDA) and method-appropriate effect size interpretation are essential for reliable inference.
+> Sparse count differential abundance analysis faces three compounding challenges: compositional closure forces mathematical coupling between features, load variation creates ±3.3 log2FC artifact potential, and >90% of published effect sizes fall within this artifact range. We present a composable toolkit with empirically validated methods and demonstrate that proper threshold selection (q < 0.10 for LinDA) and method-appropriate effect size interpretation are essential for reliable inference. The toolkit generalizes beyond microbiome to any sparse count data including single-cell RNA-seq.
 
 ### For the Introduction
 1. The microbiome field has a reproducibility problem

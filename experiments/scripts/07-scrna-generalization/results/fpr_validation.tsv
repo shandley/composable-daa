@@ -1,0 +1,6 @@
+data_type	method	n_tested	n_sig_005	n_sig_010	fpr_005	fpr_010	calibrated
+scrna	linda	165	0	0	0	0	YES
+scrna	zinb	165	25	29	.1515	.1757	NO
+scrna	hurdle	165	3	3	.0181	.0181	YES
+scrna	nb	165	0	0	0	0	YES
+scrna	permutation	165	0	0	0	0	YES

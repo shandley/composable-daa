@@ -1,0 +1,3 @@
+data_type	preset	target_sparsity	actual_sparsity	n_features	n_samples	differential
+scrna	sparse_virome	85%	~88%	200	40	20
+microbiome	typical_16s	60%	~65%	200	40	20

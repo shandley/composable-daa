@@ -1,0 +1,16 @@
+name: example-linda
+description: Example LinDA-style pipeline for differential abundance analysis
+steps:
+- !FilterLibrarySize
+  min_reads: 1000
+  max_reads: null
+- !FilterPrevalence
+  threshold: 0.1
+- !AddPseudocount
+  value: 0.5
+- NormalizeCLR
+- !ModelLM
+  formula: ~ group
+- !TestWald
+  coefficient: grouptreatment
+- CorrectBH

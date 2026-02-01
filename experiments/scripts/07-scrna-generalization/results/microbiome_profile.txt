@@ -1,0 +1,244 @@
+meta:
+  generated: 2026-02-01T02:46:45.336097+00:00
+  version: 0.1.0
+  tool: composable-daa
+  source_counts: null
+  source_metadata: null
+data_summary:
+  description: Microbiome count matrix for differential abundance analysis
+  features: 200
+  samples: 40
+  groups:
+    column: group
+    levels:
+    - treatment
+    - control
+    sizes:
+      treatment: 20
+      control: 20
+    balanced: true
+sparsity:
+  overall: 0.65925
+  category: Moderate
+  context: Moderate sparsity (50-70% zeros) is typical for many microbiome datasets. Zero handling with pseudocount is recommended for CLR. Consider filtering very rare features to reduce noise while preserving signal.
+  by_group:
+    control: 0.66225
+    treatment: 0.65625
+  group_interpretation: Similar sparsity across groups
+  implications:
+  - code: ZERO_HANDLING_REQUIRED
+    message: CLR requires pseudocount to avoid log(0)
+  - code: FILTER_RARE
+    message: Consider filtering very rare features (<5% prevalence)
+prevalence:
+  mean: 0.34074999999999994
+  median: 0.35
+  distribution:
+    very_rare:
+      threshold: 0.05
+      count: 1
+      percent: 0.5
+    rare:
+      threshold: 0.1
+      count: 9
+      percent: 4.5
+    low:
+      threshold: 0.25
+      count: 34
+      percent: 17.0
+    moderate:
+      threshold: 0.5
+      count: 159
+      percent: 79.5
+    common:
+      threshold: 0.75
+      count: 15
+      percent: 7.5
+    ubiquitous:
+      threshold: 1.0
+      count: 0
+      percent: 0.0
+  group_specific:
+    count: 33
+    percent: 16.5
+    definition: '>20% prevalence difference between groups'
+    context: Many group-specific features - groupwise filtering with 'any' logic recommended
+  implications:
+  - code: GROUPWISE_FILTERING
+    message: Use groupwise filtering to preserve group-specific signals
+    severity: moderate
+library_size:
+  mean: 9915.975
+  median: 8769.5
+  min: 610
+  max: 45493
+  cv: 0.7783742613490726
+  category: Moderate
+  by_group:
+    stats:
+      treatment:
+        mean: 11968.05
+        median: 9182.5
+      control:
+        mean: 7863.9
+        median: 6693.0
+    ratio: 1.5218975317590508
+    interpretation: Moderate library size difference between groups
+  context: Moderate library size variation (CV 0.5-1.0) is typical. Standard normalization methods (CLR, TSS) handle this well.
+  implications:
+  - code: NORMALIZATION_STANDARD
+    message: Standard normalization (CLR/TSS) is appropriate
+compositionality:
+  dominance:
+    top_1_percent: 14.419252504322461
+    top_3_percent: 32.56939563863667
+    top_10_percent: 54.52253784006166
+  evenness: 0.7281279576953984
+  gini: 0.7908009287652167
+  category: moderate
+  dominant_features:
+  - id: Feature_0000
+    mean_proportion: 0.1441925250432246
+  - id: Feature_0001
+    mean_proportion: 0.10405676986438395
+  - id: Feature_0002
+    mean_proportion: 0.07744466147875817
+  - id: Feature_0008
+    mean_proportion: 0.0411121274475001
+  - id: Feature_0004
+    mean_proportion: 0.03953900243719678
+  - id: Feature_0005
+    mean_proportion: 0.03603903718882508
+  - id: Feature_0003
+    mean_proportion: 0.03172159751134505
+  - id: Feature_0007
+    mean_proportion: 0.02776883498782017
+  - id: Feature_0009
+    mean_proportion: 0.02284917062853597
+  - id: Feature_0016
+    mean_proportion: 0.02050165181302673
+  context: Moderate dominance indicates some compositional bias is possible. When a dominant taxon changes, it may create apparent changes in other taxa even if their absolute abundance is unchanged.
+  implications: []
+recommendations:
+  filtering:
+    prevalence:
+      recommendation: 5% threshold with groupwise 'any' logic
+      confidence: high
+      rationale: With significant group-specific features, groupwise filtering with 'any' logic preserves features present in only one group while still removing noise.
+      alternatives:
+      - option: 10% overall
+        when: Want simpler, more conservative analysis
+  zero_handling:
+    recommendation: Pseudocount 0.5
+    confidence: high
+    rationale: Standard pseudocount is sufficient for this sparsity level.
+    alternatives:
+    - option: Different pseudocount (0.1, 1.0)
+      when: Want to assess sensitivity to pseudocount choice
+  normalization:
+    recommendation: CLR (Centered Log-Ratio)
+    confidence: high
+    rationale: CLR is the standard for compositional data, handling the unit-sum constraint while preserving relative relationships.
+    alternatives:
+    - option: TSS (Total Sum Scaling)
+      when: Need simple relative abundances without log transformation
+    - option: No normalization with ZINB
+      when: Using count-based models that handle library size internally
+  model:
+    recommendation: Linear model on CLR-transformed data (LinDA approach)
+    confidence: high
+    rationale: With moderate sparsity, linear models on CLR data perform well and are computationally efficient.
+    alternatives:
+    - option: ZINB
+      when: Strong biological reason to expect zero-inflation
+validation:
+  description: Validation ensures your pipeline performs as expected on your specific data. Spike-in tests inject known effects and measure detection accuracy.
+  essential:
+  - name: Spike-in validation
+    purpose: Verify detection of 2-fold changes at controlled FDR
+    command: daa validate -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment --fold-change 2.0
+    expected: Sensitivity >70%, FDR <15%
+    interpretation: If sensitivity is low, consider adjusting filtering or trying a different model. If FDR is high, increase the significance threshold.
+  - name: Prevalence optimization
+    purpose: Find optimal prevalence threshold for your data
+    command: daa optimize-prevalence -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment
+    expected: Recommended threshold with F1 score
+    interpretation: Use the recommended threshold, or compare results at different thresholds to assess robustness.
+  recommended:
+  - name: Compositional stress test
+    purpose: Quantify compositional effect attenuation
+    command: daa stress -c counts.tsv -m metadata.tsv -g group -t treatment -f "~ group" --test-coef grouptreatment --quick
+    expected: Effect attenuation <30%
+    interpretation: High attenuation indicates compositional effects are substantial; interpret fold-changes cautiously.
+warnings:
+- severity: low
+  category: confounding
+  code: LIBRARY_SIZE_IMBALANCE
+  message: Library size differs between groups (1.5x)
+  details: Systematic library size differences between groups can confound differential abundance results if not properly normalized.
+  action: Ensure normalization is applied; consider including library size as a covariate.
+pipelines:
+  recommended:
+    name: recommended_pipeline
+    description: 'Based on your data profile: With significant group-specific features, groupwise filtering with ''any'' logic preserves features present in only one group while still removing noise.. This pipeline uses groupwise filtering to preserve group-specific signals, CLR normalization for compositional data, and linear modeling for efficiency.'
+    config: |-
+      name: recommended_pipeline
+      steps:
+        - filter_prevalence_groupwise:
+            threshold: 0.05
+            group_column: "group"
+            logic: any
+        - add_pseudocount:
+            value: 0.5
+        - normalize_clr: {}
+        - model_lm:
+            formula: "~ group"
+        - test_wald:
+            coefficient: "grouptreatment"
+        - correct_bh:
+            alpha: 0.05
+  alternatives:
+  - name: zinb_pipeline
+    description: Zero-inflated negative binomial model for data with structural zeros. More computationally intensive but may better capture zero-inflation.
+    config: |-
+      name: zinb_pipeline
+      steps:
+        - filter_prevalence_groupwise:
+            threshold: 0.05
+            group_column: "group"
+            logic: any
+        - model_zinb:
+            formula: "~ group"
+            max_iter: 100
+        - test_wald_zinb:
+            coefficient: "grouptreatment"
+        - correct_bh:
+            alpha: 0.05
+llm_summary: |
+  ## Data Overview
+
+  This is a microbiome count matrix with moderate sparsity (66% zeros), moderate_variation library size variation (CV=0.78), and moderate dominance (33% from top 3 features).
+
+  ## Key Characteristics
+
+  - Sparsity: moderate - Moderate sparsity (50-70% zeros) is typical for many microbiome datasets. Zero handling with pseudocount is recommended for CLR. Consider filtering very rare features to reduce noise while preserving signal.
+  - Group-specific features: 16.5% - Many group-specific features - groupwise filtering with 'any' logic recommended
+  - Library size: moderate_variation (Moderate library size difference between groups)
+  - Compositionality: moderate dominance, evenness=0.73
+
+  ## Recommended Approach
+
+  1. Filter: 5% threshold with groupwise 'any' logic
+  2. Zeros: Pseudocount 0.5
+  3. Normalize: CLR (Centered Log-Ratio)
+  4. Model: Linear model on CLR-transformed data (LinDA approach)
+
+  ## Critical Validations
+
+  - Run spike-in validation to verify detection performance
+  - Run optimize-prevalence to find data-driven threshold
+
+  ## Warnings to Communicate
+
+  - [low] LIBRARY_SIZE_IMBALANCE: Library size differs between groups (1.5x)
+
