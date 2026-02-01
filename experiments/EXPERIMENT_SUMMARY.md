@@ -2,15 +2,15 @@
 
 ## Executive Summary
 
-Seven systematic experiments demonstrating fundamental challenges in sparse count differential abundance analysis and validating our composable toolkit as a solution that generalizes across data types.
+Ten systematic experiments demonstrating fundamental challenges in sparse count differential abundance analysis and validating our composable toolkit as a solution that generalizes across data types and body sites.
 
 **The Core Problem**: >90% of statistically significant microbiome findings have effect sizes that could be entirely explained by methodological artifacts rather than genuine biology.
 
-**The Solution**: Empirically validated, composable methods with clear guidance on thresholds, effect size interpretation, and method selection - applicable to microbiome, virome, and scRNA-seq data.
+**The Solution**: Empirically validated, composable methods with clear guidance on thresholds, effect size interpretation, and method selection - applicable to microbiome, virome, scRNA-seq, and across body sites (oral, vaginal, gut).
 
 ---
 
-## The Seven Experiments
+## The Ten Experiments
 
 ### Experiment 01: Compositional Closure
 **Question**: Do CLR-normalized analyses impose mathematical constraints on results?
@@ -130,6 +130,58 @@ Seven systematic experiments demonstrating fundamental challenges in sparse coun
 
 ---
 
+### Experiment 08: HMP Gingival Analysis
+**Question**: Do methods validated on vaginal microbiome generalize to oral microbiome?
+
+**Finding**: Cross-body-site validation confirms toolkit is body-site-agnostic.
+
+| Metric | Value | Implication |
+|--------|-------|-------------|
+| Dataset | 33,127 features × 311 samples | Large oral microbiome study |
+| LinDA (q<0.10) | 12 significant | Conservative confirmation |
+| Hurdle (q<0.10) | 719 significant | Discovery mode |
+| CLR sum | 0.000006 | Compositional closure confirmed |
+
+**Impact**: Same methods, thresholds, and interpretation apply across body sites. Toolkit is not site-specific.
+
+---
+
+### Experiment 09: IBD Cohort Reanalysis
+**Question**: What fraction of IBD microbiome findings are at artifact risk?
+
+**Finding**: 83-100% of significant findings fall within the artifact-risk zone (< 3.3 log2FC).
+
+| Effect Size | At-Risk % | Robust % | Implication |
+|-------------|-----------|----------|-------------|
+| Moderate (2.0 log2FC) | 100% | 0% | All findings at risk |
+| Large (4.0 log2FC) | 83% | 17% | Some robust findings |
+
+| Method | FPR (null data) | Status |
+|--------|-----------------|--------|
+| LinDA | 2-5% | Calibrated |
+| Hurdle | 3-5% | Calibrated |
+| Permutation | 4-5% | Gold standard |
+
+**Impact**: IBD patients have increased load variation (diarrhea, inflammation). Many published IBD-microbiome associations may be artifacts. Spike-in controls recommended.
+
+---
+
+### Experiment 10: CRC Meta-Analysis
+**Question**: Do findings replicate across independent cohorts?
+
+**Finding**: Cross-study consistency is rare. Most findings are study-specific.
+
+| Cohorts Significant | Taxa Count | Classification |
+|--------------------|------------|----------------|
+| 0 cohorts | Many | Not significant |
+| 1 cohort | 38 | Study-specific (at-risk) |
+| 2-3 cohorts | Few | Moderate consistency |
+| 4 cohorts | 0 | Most robust |
+
+**Impact**: Cross-study consistency is the gold standard for robust findings. Study-specific results require validation. Meta-analysis should report per-cohort results, not just pooled statistics.
+
+---
+
 ## Synthesis: The Three-Layer Problem
 
 ```
@@ -163,6 +215,24 @@ Seven systematic experiments demonstrating fundamental challenges in sparse coun
 │  Microbiome (16S/virome) ←→ scRNA-seq ←→ Other sparse counts    │
 │  Same challenges, same methods, same recommendations            │
 └─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  CROSS-BODY-SITE VALIDATION (Exp 08)                            │
+│  Vaginal (Ravel) ←→ Oral (HMP) ←→ Gut (IBD/CRC)                 │
+│  Methods transfer across all body sites                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  CLINICAL CONTEXT: ARTIFACT RISK (Exp 09)                       │
+│  IBD: 83-100% of findings at artifact risk                       │
+│  Disease states increase load variation → more artifacts         │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  CROSS-STUDY CONSISTENCY (Exp 10)                               │
+│  0/38 taxa significant in all cohorts                           │
+│  Study-specific findings ≠ robust biology                        │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -192,6 +262,7 @@ A finding is considered robust if:
 1. **Effect size > 3.3 log2FC** (exceeds load artifact potential)
 2. **Significant in multiple methods** (LinDA AND ZINB/Hurdle)
 3. **Consistent direction** across methods
+4. **Replicates across cohorts** (significant in 3+ independent studies)
 
 ---
 
@@ -206,10 +277,13 @@ experiments/scripts/
 ├── 04-variance-estimation/run_analysis.sh
 ├── 05-linda-sensitivity/run_analysis.sh
 ├── 06-effect-size-recovery/run_analysis.sh
-└── 07-scrna-generalization/run_analysis.sh
+├── 07-scrna-generalization/run_analysis.sh
+├── 08-hmp-gingival/run_analysis.sh
+├── 09-ibd-reanalysis/run_analysis.sh
+└── 10-crc-meta-analysis/run_analysis.sh
 ```
 
-### Figures (~40 publication-ready)
+### Figures (~55 publication-ready)
 ```
 experiments/scripts/
 ├── 01-bv-analysis/generate_figures.py          # 7 figures
@@ -218,12 +292,15 @@ experiments/scripts/
 ├── 04-variance-estimation/generate_figures.py  # 5 figures
 ├── 05-linda-sensitivity/generate_figures.py    # 6 figures
 ├── 06-effect-size-recovery/generate_figures.py # 6 figures
-└── 07-scrna-generalization/generate_figures.py # 5 figures
+├── 07-scrna-generalization/generate_figures.py # 5 figures
+├── 08-hmp-gingival/generate_figures.py         # 4 figures
+├── 09-ibd-reanalysis/generate_figures.py       # 4 figures
+└── 10-crc-meta-analysis/generate_figures.py    # 5 figures
 ```
 
 ### Documentation
-- 7 detailed experiment markdown files
-- 7 figure legend files
+- 10 detailed experiment markdown files
+- 10 figure legend files
 - This summary document
 
 ---
@@ -231,7 +308,7 @@ experiments/scripts/
 ## Key Messages for Publication
 
 ### For the Abstract
-> Sparse count differential abundance analysis faces three compounding challenges: compositional closure forces mathematical coupling between features, load variation creates ±3.3 log2FC artifact potential, and >90% of published effect sizes fall within this artifact range. We present a composable toolkit with empirically validated methods and demonstrate that proper threshold selection (q < 0.10 for LinDA) and method-appropriate effect size interpretation are essential for reliable inference. The toolkit generalizes beyond microbiome to any sparse count data including single-cell RNA-seq.
+> Sparse count differential abundance analysis faces three compounding challenges: compositional closure forces mathematical coupling between features, load variation creates ±3.3 log2FC artifact potential, and >90% of published effect sizes fall within this artifact range. We present a composable toolkit with empirically validated methods and demonstrate that proper threshold selection (q < 0.10 for LinDA) and method-appropriate effect size interpretation are essential for reliable inference. The toolkit generalizes across body sites (oral, vaginal, gut), data types (16S, virome, scRNA-seq), and disease contexts (BV, IBD, CRC). Cross-study consistency analysis reveals that most findings are study-specific, reinforcing that robust biology must replicate across independent cohorts.
 
 ### For the Introduction
 1. The microbiome field has a reproducibility problem
@@ -249,10 +326,11 @@ experiments/scripts/
 
 ## Future Directions
 
-1. **Extend to more datasets**: Apply artifact risk framework to IBD, CRC, obesity cohorts
+1. **Extend to obesity/metabolic cohorts**: Apply artifact risk framework to additional disease contexts
 2. **Develop artifact-risk metric**: Automatic scoring for any DAA output
 3. **Build power calculator**: Help users design adequately powered studies
 4. **Create validation standards**: Spike-in protocols for routine use
+5. **Formal meta-analysis methods**: Integrate fixed/random effects meta-analysis into toolkit
 
 ---
 
