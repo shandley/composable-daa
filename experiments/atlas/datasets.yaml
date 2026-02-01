@@ -1,0 +1,197 @@
+# MicrobiomeHD Dataset Inventory
+# Source: https://zenodo.org/records/840333
+# Total: 30 datasets across 12 disease categories
+
+diseases:
+  crc:
+    name: Colorectal Cancer
+    cohorts:
+      - id: baxter
+        file: crc_baxter_results.tar.gz
+        reference: "Baxter et al. 2016"
+        samples_expected: 490
+      - id: zeller
+        file: crc_zeller_results.tar.gz
+        reference: "Zeller et al. 2014"
+        samples_expected: 116
+      - id: zackular
+        file: crc_zackular_results.tar.gz
+        reference: "Zackular et al. 2014"
+        samples_expected: 60
+      - id: xiang
+        file: crc_xiang_results.tar.gz
+        reference: "Xiang et al."
+        samples_expected: ~100
+      - id: zhao
+        file: crc_zhao_results.tar.gz
+        reference: "Zhao et al."
+        samples_expected: ~100
+      - id: zhu
+        file: crc_zhu_results.tar.gz
+        reference: "Zhu et al."
+        samples_expected: ~100
+    status: partial  # 3/6 done in Exp 11
+
+  ibd:
+    name: Inflammatory Bowel Disease
+    cohorts:
+      - id: alm
+        file: ibd_alm_results.tar.gz
+        reference: "Alm et al."
+        samples_expected: ~200
+      - id: engstrand
+        file: ibd_engstrand_maxee_results.tar.gz
+        reference: "Engstrand et al."
+        samples_expected: ~100
+      - id: gevers
+        file: ibd_gevers_2014_results.tar.gz
+        reference: "Gevers et al. 2014"
+        samples_expected: ~300
+      - id: huttenhower
+        file: ibd_huttenhower_results.tar.gz
+        reference: "Huttenhower et al."
+        samples_expected: ~200
+    status: pending
+
+  obesity:
+    name: Obesity
+    cohorts:
+      - id: goodrich
+        file: ob_goodrich_results.tar.gz
+        reference: "Goodrich et al."
+        samples_expected: ~400
+      - id: gordon
+        file: ob_gordon_2008_v2_results.tar.gz
+        reference: "Gordon et al. 2008"
+        samples_expected: ~100
+      - id: ross
+        file: ob_ross_results.tar.gz
+        reference: "Ross et al."
+        samples_expected: ~100
+      - id: zupancic
+        file: ob_zupancic_results.tar.gz
+        reference: "Zupancic et al."
+        samples_expected: ~200
+      - id: escobar
+        file: ob_escobar_results.tar.gz
+        reference: "Escobar et al."
+        samples_expected: ~100
+    status: pending
+
+  cdi:
+    name: Clostridioides difficile Infection
+    cohorts:
+      - id: schubert
+        file: cdi_schubert_results.tar.gz
+        reference: "Schubert et al."
+        samples_expected: ~300
+      - id: vincent
+        file: cdi_vincent_v3v5_results.tar.gz
+        reference: "Vincent et al."
+        samples_expected: ~100
+      - id: youngster
+        file: cdi_youngster_results.tar.gz
+        reference: "Youngster et al."
+        samples_expected: ~50
+    status: pending
+
+  hiv:
+    name: HIV
+    cohorts:
+      - id: dinh
+        file: hiv_dinh_results.tar.gz
+        reference: "Dinh et al."
+        samples_expected: ~100
+      - id: lozupone
+        file: hiv_lozupone_results.tar.gz
+        reference: "Lozupone et al."
+        samples_expected: ~100
+      - id: noguerajulian
+        file: hiv_noguerajulian_results.tar.gz
+        reference: "Noguera-Julian et al."
+        samples_expected: ~200
+    status: pending
+
+  t1d:
+    name: Type 1 Diabetes
+    cohorts:
+      - id: alkanani
+        file: t1d_alkanani_results.tar.gz
+        reference: "Alkanani et al."
+        samples_expected: ~50
+      - id: mejialeon
+        file: t1d_mejialeon_results.tar.gz
+        reference: "Mejia-Leon et al."
+        samples_expected: ~50
+    status: pending
+
+  liver:
+    name: Liver Disease (Cirrhosis/NASH/MHE)
+    cohorts:
+      - id: zhang_mhe
+        file: mhe_zhang_results.tar.gz
+        reference: "Zhang et al. (MHE)"
+        samples_expected: ~100
+      - id: chan_nash
+        file: nash_chan_results.tar.gz
+        reference: "Chan et al. (NASH)"
+        samples_expected: ~100
+      - id: baker_nash
+        file: nash_ob_baker_results.tar.gz
+        reference: "Baker et al. (NASH/OB)"
+        samples_expected: ~100
+    status: pending
+
+  autism:
+    name: Autism Spectrum Disorder
+    cohorts:
+      - id: son
+        file: asd_son_results.tar.gz
+        reference: "Son et al."
+        samples_expected: ~50
+      - id: kb
+        file: autism_kb_results.tar.gz
+        reference: "KB et al."
+        samples_expected: ~50
+    status: pending
+
+  parkinsons:
+    name: Parkinson's Disease
+    cohorts:
+      - id: scheperjans
+        file: par_scheperjans_results.tar.gz
+        reference: "Scheperjans et al."
+        samples_expected: ~100
+    status: pending
+    note: Only 1 cohort - cannot calculate replication
+
+  ra:
+    name: Rheumatoid Arthritis
+    cohorts:
+      - id: littman
+        file: ra_littman_results.tar.gz
+        reference: "Littman et al."
+        samples_expected: ~100
+    status: pending
+    note: Only 1 cohort - cannot calculate replication
+
+  edd:
+    name: Enteric Diarrheal Disease
+    cohorts:
+      - id: singh
+        file: edd_singh_results.tar.gz
+        reference: "Singh et al."
+        samples_expected: ~100
+    status: pending
+    note: Only 1 cohort - cannot calculate replication
+
+# Priority order for Phase 1 (diseases with 2+ cohorts)
+phase1_priority:
+  - crc        # 6 cohorts - highest priority
+  - obesity    # 5 cohorts
+  - ibd        # 4 cohorts
+  - cdi        # 3 cohorts
+  - hiv        # 3 cohorts
+  - liver      # 3 cohorts
+  - t1d        # 2 cohorts
+  - autism     # 2 cohorts

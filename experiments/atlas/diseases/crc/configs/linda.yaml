@@ -1,0 +1,13 @@
+name: linda
+description: LinDA-style pipeline (CLR + Linear Model)
+steps:
+- !FilterPrevalence
+  threshold: 0.10
+- !AddPseudocount
+  value: 0.5
+- NormalizeCLR
+- !ModelLM
+  formula: "~ group"
+- !TestWald
+  coefficient: groupcontrol
+- CorrectBH

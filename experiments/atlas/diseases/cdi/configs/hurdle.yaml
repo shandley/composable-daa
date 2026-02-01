@@ -1,0 +1,9 @@
+name: hurdle
+steps:
+- !FilterPrevalence
+  threshold: 0.10
+- !ModelHurdle
+  formula: "~ group"
+- !TestWald
+  coefficient: groupcontrol
+- CorrectBH
