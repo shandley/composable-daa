@@ -339,3 +339,67 @@ The `experiments/` directory documents research opportunities identified during 
 3. **Compositional Artifact Audit** - Proposed meta-analysis of published findings
 
 These serve as validation case studies and potential standalone publications. See `experiments/README.md` for details.
+
+---
+
+## Microbiome Reproducibility Atlas (Active Project)
+
+**Location**: `experiments/atlas/` and `experiments/REPRODUCIBILITY_ATLAS.md`
+
+### Project Vision
+
+Systematic characterization of microbiome-disease associations across public datasets. **Key insight**: The "reproducibility crisis" is largely a power crisis—even the most replicated finding (Fusobacterium-CRC) doesn't reach significance (p=0.56) in proper meta-analysis.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `experiments/REPRODUCIBILITY_ATLAS.md` | Master vision document (UPDATED) |
+| `experiments/atlas/FRAMEWORK.md` | Methodology documentation |
+| `experiments/atlas/VALIDATION_RESULTS.md` | Fusobacterium case study results |
+| `experiments/atlas/PHASE1_RESULTS.md` | Phase 1 findings (UPDATED) |
+| `experiments/atlas/scripts/taxonomy.py` | Taxonomic harmonization (Greengenes/SILVA parsing) |
+| `experiments/atlas/scripts/meta_analysis.py` | DerSimonian-Laird random-effects meta-analysis |
+| `experiments/atlas/scripts/power_analysis.py` | Sample size and MDE calculations |
+| `experiments/atlas/scripts/reprocess_with_taxonomy.py` | CRC data reprocessing pipeline |
+
+### Current Status (as of Feb 2026)
+
+**Completed**:
+- Phase 1A: OTU-level analysis (found 0% replication - methodologically flawed)
+- Phase 1B: Genus-level reanalysis with taxonomic harmonization
+- Fusobacterium validation case study
+- Random-effects meta-analysis implementation
+- Power analysis framework
+- Documentation revision (from "replication scores" to "effect characterization")
+
+**Key Finding**: Fusobacterium-CRC shows:
+- Correct direction in 3/4 cohorts
+- Pooled effect = -0.26, p = 0.56 (NOT significant)
+- I² = 0% (consistent across studies, just underpowered)
+- The "70x fold change" is driven by 2 outlier patients
+
+**Next Steps**:
+1. Expand to IBD, obesity, T2D with genus-level harmonization
+2. Add shotgun validation (curatedMetagenomicData)
+3. Build searchable effect database
+4. Publication: "Why Most Microbiome Findings Don't Replicate"
+
+### Running the Analysis
+
+```bash
+# Reprocess CRC data with taxonomy
+python experiments/atlas/scripts/reprocess_with_taxonomy.py
+
+# Run meta-analysis
+python experiments/atlas/scripts/meta_analysis.py
+
+# Power analysis
+python experiments/atlas/scripts/power_analysis.py
+```
+
+### Data Location
+
+- Raw data: `experiments/atlas/diseases/crc/data/` (downloaded from MicrobiomeHD)
+- Genus-level: `experiments/atlas/diseases/crc/data_genus/`
+- Results: `experiments/atlas/diseases/crc/results_genus/`
