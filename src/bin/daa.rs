@@ -1450,14 +1450,30 @@ fn cmd_recommend(
         .copied();
 
     // Detect time column (for longitudinal)
-    let time_column: Option<&str> = all_columns
-        .iter()
-        .find(|col| {
-            let col_lower = col.to_lowercase();
-            col_lower != group.to_lowercase() &&
-            time_patterns.iter().any(|p| col_lower.contains(p))
-        })
-        .copied();
+    // Prefer exact matches over substring matches to avoid matching "months" in "Feeding.Type..0.6.months."
+    let time_column: Option<&str> = {
+        // First try exact match
+        let exact_match = all_columns
+            .iter()
+            .find(|col| {
+                let col_lower = col.to_lowercase();
+                col_lower != group.to_lowercase() &&
+                time_patterns.iter().any(|p| col_lower == *p)
+            });
+
+        // If no exact match, try substring match
+        match exact_match {
+            Some(col) => Some(*col),
+            None => all_columns
+                .iter()
+                .find(|col| {
+                    let col_lower = col.to_lowercase();
+                    col_lower != group.to_lowercase() &&
+                    time_patterns.iter().any(|p| col_lower.contains(p))
+                })
+                .copied()
+        }
+    };
 
     // Detect batch columns
     let batch_columns: Vec<&str> = all_columns
