@@ -1535,8 +1535,50 @@ fn cmd_recommend(
         )
     };
 
-    // Build the coefficient name
-    let test_coef = format!("{}{}", group, target);
+    // Build the coefficient name and track if we need to flip interpretation
+    // Statistical models use alphabetically-first level as reference by default.
+    // The coefficient will be created for the non-reference level(s).
+    let levels = metadata.levels(group)?;
+    if levels.is_empty() {
+        return Err(composable_daa::error::DaaError::InvalidParameter(
+            format!("No levels found in group column '{}'", group)
+        ));
+    }
+    if !levels.contains(&target.to_string()) {
+        return Err(composable_daa::error::DaaError::InvalidParameter(
+            format!("Target '{}' not found in group column '{}'. Available levels: {:?}",
+                    target, group, levels)
+        ));
+    }
+    if levels.len() != 2 {
+        return Err(composable_daa::error::DaaError::InvalidParameter(
+            format!("The recommend command currently only supports two-level comparisons. \
+                    Group '{}' has {} levels: {:?}",
+                    group, levels.len(), levels)
+        ));
+    }
+
+    // The model will use the alphabetically-first level as reference (already sorted by levels())
+    let reference_level = &levels[0];
+    let other_level = &levels[1];
+
+    // Determine which level should be the actual reference based on user's target
+    // If user wants target as the comparison group, we want: target - reference
+    // But model creates: other_level - reference_level (alphabetically)
+    let (actual_reference, flip_sign) = if target == reference_level {
+        // User wants: CELIAC - CONTROL (but CELIAC is alphabetically first, so it IS the reference)
+        // Model creates coefficient for: CONTROL (which means CONTROL - CELIAC)
+        // We need to flip the sign to get CELIAC - CONTROL
+        (other_level.as_str(), true)
+    } else {
+        // User wants: CONTROL - CELIAC (and CELIAC is alphabetically first reference)
+        // Model creates coefficient for: CONTROL (which means CONTROL - CELIAC)
+        // This is what we want, no flip needed
+        (reference_level.as_str(), false)
+    };
+
+    // The coefficient name will always be: group + non_reference_level
+    let test_coef = format!("{}{}", group, other_level);
 
     // Handle YAML output mode
     if yaml {
@@ -1658,10 +1700,14 @@ fn cmd_recommend(
             println!("=== Running {} Analysis ===", method.to_uppercase());
             eprintln!("  Formula: {}", formula);
             eprintln!("  Testing: {}", test_coef);
+            eprintln!("  Comparison: {} vs {} (reference)", target, actual_reference);
+            if flip_sign {
+                eprintln!("  Note: Signs flipped to interpret as {} - {}", target, actual_reference);
+            }
         }
 
         // Build and run the appropriate pipeline
-        let results = match method {
+        let mut results = match method {
             "hurdle" => {
                 Pipeline::new()
                     .name("Hurdle")
@@ -1703,6 +1749,17 @@ fn cmd_recommend(
                     .run(&counts, &metadata)?
             }
         };
+
+        // Flip signs if needed to match user's interpretation
+        // User specified target as -t, so results should be interpreted as "target - reference"
+        // But if target is alphabetically first, the model uses it as reference
+        // So we flip signs to get the correct interpretation
+        if flip_sign {
+            for result in &mut results.results {
+                result.estimate = -result.estimate;
+                result.statistic = -result.statistic;
+            }
+        }
 
         if !quiet {
             eprintln!("Writing results to {:?}...", output_file);
